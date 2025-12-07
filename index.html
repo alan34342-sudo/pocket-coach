@@ -177,6 +177,35 @@
             a.download = `pocket_coach_backup_${currentDate}.json`;
             a.click();
         };
+
+        // NEW: Import Data Function
+        window.importData = () => {
+            const jsonStr = document.getElementById('import-json').value.trim();
+            if (!jsonStr) return showToast("請貼上備份資料", "error");
+            
+            try {
+                const data = JSON.parse(jsonStr);
+                
+                // Validate basic structure (optional but good practice)
+                if (!data.accounts && !data.monthlyIncome && !data.fixedExpenses && !data.dailyLogs) {
+                    throw new Error("無效的備份格式");
+                }
+
+                if (confirm("⚠️ 警告：這將會覆蓋您目前所有的資料！\n確定要匯入嗎？")) {
+                    if(data.accounts) DB.set('accounts', data.accounts);
+                    if(data.monthlyIncome) DB.set('income', data.monthlyIncome);
+                    if(data.fixedExpenses) DB.set('fixed', data.fixedExpenses);
+                    if(data.investments) DB.set('investments', data.investments);
+                    if(data.dailyLogs) DB.set('logs', data.dailyLogs);
+                    if(data.userProfile) DB.set('profile', data.userProfile);
+                    
+                    alert("匯入成功！頁面將重新整理。");
+                    location.reload();
+                }
+            } catch (e) {
+                alert("匯入失敗：資料格式錯誤。\n" + e.message);
+            }
+        };
         
         window.fetchGoogleModels = async () => {
             const apiKey = document.getElementById('setting-api-key').value.trim() || USER_API_KEY;
@@ -1003,6 +1032,12 @@
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
                 <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">📦 資料備份</h3>
                 <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
+                
+                <div class="mt-4 border-t pt-4">
+                    <label class="text-xs text-gray-500 block mb-2">📥 資料匯入 (救援)</label>
+                    <textarea id="import-json" class="w-full border p-2 rounded text-xs h-20 mb-2" placeholder="在此貼上備份文字..."></textarea>
+                    <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入並覆蓋</button>
+                </div>
             </div>
             
             <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v17.0<br>(Delete & Modify Feature)</div>
