@@ -66,10 +66,10 @@
         // Defaults
         const defaultAccountsList = ['國泰', '郵局', 'BANK', '合庫', '玉山', '聯邦'];
         const defaultFixedList = [
-            {name: '餐費', note: '月預算', amount: 0, id: 1},
-            {name: '生活用品', note: '合庫', amount: 0, id: 2},
-            {name: '電話費', note: '合庫', amount: 0, id: 3},
-            {name: '壽險', note: '郵局', amount: 0, id: 4},
+            {name: '餐費', note: '國泰', amount: 8000, id: 1}, // 預設綁定國泰
+            {name: '生活用品', note: '合庫', amount: 1000, id: 2},
+            {name: '電話費', note: '合庫', amount: 500, id: 3},
+            {name: '壽險', note: '郵局', amount: 3000, id: 4},
             {name: '筆電', note: '聯邦', amount: 0, id: 5},
             {name: '保險', note: '國泰', amount: 0, id: 6},
             {name: '機車', note: '合庫', amount: 0, id: 7},
@@ -419,6 +419,7 @@
             // Default View
             document.getElementById('input-default-container').classList.remove('hidden');
             document.getElementById('input-account-container').classList.add('hidden');
+            document.getElementById('input-fixed-acc-container').classList.add('hidden');
             
             setValue('input-value', ''); setValue('input-note', '');
             document.getElementById('input-modal').classList.remove('hidden');
@@ -427,8 +428,27 @@
             const note = document.getElementById('input-note');
 
             if(type === 'income') { title.textContent = '修改收入'; setValue('input-value', monthlyIncome[id]); noteContainer.classList.add('hidden'); } 
-            else if(type === 'fixed_add') { title.textContent = '新增固定支出'; noteContainer.classList.remove('hidden'); note.placeholder = '名稱'; } 
-            else if (type === 'fixed_edit') { title.textContent = '修改固定支出'; setValue('input-value', fixedExpenses.find(f=>f.id===id).amount); noteContainer.classList.add('hidden'); } 
+            else if(type === 'fixed_add') { 
+                title.textContent = '新增固定支出'; 
+                noteContainer.classList.remove('hidden'); 
+                note.placeholder = '名稱';
+                
+                // Show Fixed Account Select
+                document.getElementById('input-fixed-acc-container').classList.remove('hidden');
+                const fixedAccSel = document.getElementById('input-fixed-acc-select');
+                fixedAccSel.innerHTML = accounts.map(a => `<option value="${a.name}">${a.name}</option>`).join('');
+            } 
+            else if (type === 'fixed_edit') { 
+                title.textContent = '修改固定支出'; 
+                const item = fixedExpenses.find(f=>f.id===id);
+                setValue('input-value', item.amount); 
+                noteContainer.classList.add('hidden'); 
+                
+                // Show Fixed Account Select & Set Value
+                document.getElementById('input-fixed-acc-container').classList.remove('hidden');
+                const fixedAccSel = document.getElementById('input-fixed-acc-select');
+                fixedAccSel.innerHTML = accounts.map(a => `<option value="${a.name}" ${item.note===a.name?'selected':''}>${a.name}</option>`).join('');
+            } 
             else if(type === 'balance') { title.textContent = '資產校正'; if(id===-1) { noteContainer.classList.remove('hidden'); note.placeholder = '帳戶名稱'; } else { setValue('input-value', accounts[id].balance); noteContainer.classList.add('hidden'); } }
             // NEW: Change Account Logic
             else if (type === 'change_account') {
@@ -472,9 +492,23 @@
             } else {
                 const v = parseInt(document.getElementById('input-value').value)||0;
                 const n = document.getElementById('input-note').value;
+                
                 if(window.inputType === 'income') { monthlyIncome[window.inputId] = v; }
-                if(window.inputType === 'fixed_add') { if(!n) return; fixedExpenses.push({id:Date.now(), name:n, amount:v, note:'固定'}); }
-                if(window.inputType === 'fixed_edit') { const idx = fixedExpenses.findIndex(f=>f.id===window.inputId); if(idx!==-1) fixedExpenses[idx].amount = v; }
+                
+                if(window.inputType === 'fixed_add') { 
+                    if(!n) return; 
+                    const acc = document.getElementById('input-fixed-acc-select').value;
+                    fixedExpenses.push({id:Date.now(), name:n, amount:v, note:acc}); 
+                }
+                
+                if(window.inputType === 'fixed_edit') { 
+                    const idx = fixedExpenses.findIndex(f=>f.id===window.inputId); 
+                    if(idx!==-1) {
+                        fixedExpenses[idx].amount = v;
+                        fixedExpenses[idx].note = document.getElementById('input-fixed-acc-select').value;
+                    }
+                }
+                
                 if(window.inputType === 'balance') { if(window.inputId === -1) { if(!n) return; accounts.push({name:n, balance:v}); } else { accounts[window.inputId].balance = v; } }
             }
             saveData();
@@ -577,7 +611,7 @@
                         ${isPaid ? '<span class="text-green-500 text-xs">🟢</span>' : '<span class="text-gray-200 text-xs">⚪</span>'}
                         <div>
                             <div class="font-medium">${f.name}</div>
-                            <div class="text-xs text-gray-400">剩餘: $${remaining}</div>
+                            <div class="text-xs text-gray-400">剩餘: $${remaining} · 綁定: ${f.note}</div>
                         </div>
                     </div>
                     <div class="flex items-center">
@@ -705,12 +739,8 @@
                     const remaining = fixedItem.amount - spent;
                     budgetInfo = ` (預算剩: $${remaining})`;
 
-                    // Determine Account Connection
-                    if (v === '餐費') {
-                        targetSelectAccount = '國泰'; // Force override per user request
-                    } else {
-                        targetSelectAccount = fixedItem.note; // Default to the note (e.g. 合庫)
-                    }
+                    // Determine Account Connection -> NOW RELIES ON FIXED ITEM NOTE (Payment Account)
+                    targetSelectAccount = fixedItem.note; 
                 }
 
                 // 2. Generate Options
@@ -757,6 +787,11 @@
             <div id="input-account-container" class="mb-3 hidden">
                 <label class="text-xs text-gray-500 block mb-2">選擇新扣款帳戶</label>
                 <select id="input-account-select" class="w-full border p-3 rounded font-bold bg-white"></select>
+            </div>
+
+            <div id="input-fixed-acc-container" class="mb-3 hidden">
+                <label class="text-xs text-gray-500 block mb-2">綁定扣款帳戶</label>
+                <select id="input-fixed-acc-select" class="w-full border p-3 rounded font-bold bg-white"></select>
             </div>
 
             <div class="flex gap-2"><button onclick="closeModal('input')" class="flex-1 bg-gray-100 py-2 rounded">取消</button><button onclick="submitInputModal()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold">確定</button></div>
