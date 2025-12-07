@@ -66,7 +66,7 @@
         // Defaults
         const defaultAccountsList = ['國泰', '郵局', 'BANK', '合庫', '玉山', '聯邦'];
         const defaultFixedList = [
-            {name: '食物', note: '國泰', amount: 8000, id: 1},  // 已更名為 食物, 預設綁定國泰
+            {name: '食物', note: '國泰', amount: 8000, id: 1}, 
             {name: '生活用品', note: '合庫', amount: 1000, id: 2},
             {name: '電話費', note: '合庫', amount: 500, id: 3},
             {name: '壽險', note: '郵局', amount: 3000, id: 4},
@@ -77,7 +77,7 @@
         ];
         
         const categoryIcons = {
-            '食物': '🍱',
+            '食物': '🍱', '餐費': '🍱', 
             '生活用品': '🧻', '電話費': '📞', '交通': '🛵', '交通/機車': '🛵',
             '娛樂': '🎬', '投資': '🔥', '運動': '💪', '保險': '🏥', '保險/醫療': '🏥', 
             '其他': '📝', '電費': '⚡', '壽險': '🏥', '筆電': '💻', '機車': '🛵'
@@ -246,8 +246,7 @@
             btn.disabled = true; btn.textContent = 'AI 運算中...';
 
             try {
-                // Modified condition to support '食物' (Food)
-                if(category === '食物') {
+                if(category === '食物' || category === '餐費') {
                     const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                     if(res.error) throw new Error(res.error);
                     window.pendingLog = { description, amount, category, card, type: 'finance_health' };
@@ -266,7 +265,7 @@
                 }
             } catch(e) { 
                 showToast(`AI 錯誤: ${e.message||'未知'}`, 'error');
-                if(category === '食物') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
+                if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
                 else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
@@ -704,11 +703,13 @@
             const hasFood = fixedExpenses.some(f => f.name === '食物');
             
             let finalCats = [];
-            if (hasFood) {
-                finalCats = ['食物', ...fixedNames];
-            } else {
-                finalCats = fixedNames;
-            }
+            // Add '食物', then '娛樂', then '投資' (These are essential), then the rest of Fixed Expenses
+            if (hasFood) finalCats.push('食物');
+            finalCats.push('娛樂', '投資');
+            finalCats = [...finalCats, ...fixedNames];
+            
+            // Remove duplicates just in case user added '娛樂' or '投資' manually to fixed list
+            finalCats = [...new Set(finalCats)];
 
             select.innerHTML = finalCats.map(c => {
                 const icon = categoryIcons[c] || '📝'; 
@@ -744,7 +745,25 @@
                 const fixedItem = fixedExpenses.find(f => f.name === v);
 
                 // 1. Determine Target Account & Budget Info
-                if (fixedItem) {
+                // 1a. Check for Dynamic Budgets (Entertainment / Investment)
+                if (v === '娛樂' || v === '投資') {
+                    // Recalculate dynamic budget on the fly
+                    const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
+                    const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
+                    const disposable = incomeTotal - fixedTotal;
+                    const ratio = v === '娛樂' ? (userProfile.entRatio || 20) : (100 - (userProfile.entRatio || 20));
+                    const totalBudget = Math.floor(disposable * (ratio / 100));
+                    
+                    const monthStart = currentDate.substring(0, 7);
+                    const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
+                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
+                    const remaining = totalBudget - spent;
+                    
+                    budgetInfo = ` (預算剩: $${remaining})`;
+                    // No forced account for dynamic budgets, user chooses freely
+                }
+                // 1b. Check for Fixed Expense Link
+                else if (fixedItem) {
                     // Calculate Budget
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
@@ -771,6 +790,16 @@
                 }).join('') + '<option value="custom">➕ 自訂...</option>';
 
                 cardSel.innerHTML = optionsHtml;
+                
+                // Hack: For Entertainment/Investment, since they don't lock an account, 
+                // we update the selected option's text AFTER generation if we want to show budget there
+                if (v === '娛樂' || v === '投資') {
+                    Array.from(cardSel.options).forEach(opt => {
+                        if (opt.value !== 'custom') {
+                            opt.text = `${opt.text.split('(')[0]} ${budgetInfo}`;
+                        }
+                    });
+                }
             }
         };
 
