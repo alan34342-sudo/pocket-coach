@@ -341,14 +341,15 @@
         };
 
         const commitLog = (d) => {
-            const nowStr = getLocalDate();
-            const logData = { id: Date.now().toString(), timestamp: new Date().toISOString(), dateStr: nowStr, description: d.description, amount: d.amount, category: d.category, card: d.card, type: d.type, kcal: d.kcal || 0, protein: d.protein || 0, burned: d.burned || 0 };
+            // FIX: 使用當前選定的日期 (currentDate) 而不是當下時間 (getLocalDate())
+            const logDateStr = currentDate; 
+            const logData = { id: Date.now().toString(), timestamp: new Date().toISOString(), dateStr: logDateStr, description: d.description, amount: d.amount, category: d.category, card: d.card, type: d.type, kcal: d.kcal || 0, protein: d.protein || 0, burned: d.burned || 0 };
             dailyLogs.unshift(logData);
             if(d.amount > 0 && d.card) {
                 const idx = accounts.findIndex(a=>a.name===d.card);
                 if(idx!==-1) accounts[idx].balance -= d.amount;
             }
-            if (currentDate !== nowStr) currentDate = nowStr;
+            // 移除強制更新 currentDate 的邏輯，保持在使用者選定的那一天
             saveData();
         };
 
