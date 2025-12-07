@@ -178,7 +178,7 @@
             a.click();
         };
 
-        // NEW: Import Data Function
+        // NEW: Import Data Function (資料救援與匯入)
         window.importData = () => {
             const jsonStr = document.getElementById('import-json').value.trim();
             if (!jsonStr) return showToast("請貼上備份資料", "error");
@@ -186,11 +186,11 @@
             try {
                 const data = JSON.parse(jsonStr);
                 
-                // 寬容處理：如果使用者只貼了紀錄陣列，詢問是否還原
+                // 寬容處理：如果使用者只貼了紀錄陣列 (如: [{"id":1...])
                 if (Array.isArray(data)) {
-                    if(confirm("⚠️ 偵測到這似乎是一串單純的『記帳紀錄 (Array)』，而非完整備份檔。\n\n是否將其作為『記帳紀錄』匯入並覆蓋現有紀錄？")) {
+                    if(confirm("⚠️ 系統偵測到這似乎是單純的『記帳紀錄陣列 (Array)』。\n\n是否將其作為『記帳紀錄』匯入並覆蓋現有紀錄？")) {
                         DB.set('logs', data);
-                        alert("紀錄匯入成功！頁面將重新整理。");
+                        alert("紀錄匯入成功！頁面將自動重新整理。");
                         location.reload();
                         return;
                     }
@@ -210,11 +210,11 @@
                     if(data.dailyLogs) DB.set('logs', data.dailyLogs);
                     if(data.userProfile) DB.set('profile', data.userProfile);
                     
-                    alert("資料還原成功！頁面將重新整理。");
+                    alert("資料還原成功！頁面將自動重新整理。");
                     location.reload();
                 }
             } catch (e) {
-                alert("匯入失敗：資料格式錯誤。\n錯誤訊息：" + e.message);
+                alert("匯入失敗：資料格式錯誤。\n請確認您貼上的是正確的 JSON 格式。\n錯誤訊息：" + e.message);
             }
         };
         
@@ -1045,9 +1045,9 @@
                 <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
                 
                 <div class="mt-4 border-t pt-4">
-                    <label class="text-xs text-gray-500 block mb-2">📥 資料匯入 (救援)</label>
-                    <textarea id="import-json" class="w-full border p-2 rounded text-xs h-20 mb-2" placeholder="在此貼上備份文字..."></textarea>
-                    <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入並覆蓋</button>
+                    <label class="text-xs text-gray-500 block mb-2">📥 資料救援與匯入</label>
+                    <textarea id="import-json" class="w-full border p-2 rounded text-xs h-32 mb-2" placeholder="在此貼上備份文字..."></textarea>
+                    <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">確認匯入</button>
                 </div>
             </div>
             
