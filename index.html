@@ -77,7 +77,7 @@
         ];
         
         const categoryIcons = {
-            '食物': '🍱', '餐費': '🍱', // 兼容舊名
+            '食物': '🍱',
             '生活用品': '🧻', '電話費': '📞', '交通': '🛵', '交通/機車': '🛵',
             '娛樂': '🎬', '投資': '🔥', '運動': '💪', '保險': '🏥', '保險/醫療': '🏥', 
             '其他': '📝', '電費': '⚡', '壽險': '🏥', '筆電': '💻', '機車': '🛵'
@@ -247,7 +247,7 @@
 
             try {
                 // Modified condition to support '食物' (Food)
-                if(category === '食物' || category === '餐費') {
+                if(category === '食物') {
                     const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                     if(res.error) throw new Error(res.error);
                     window.pendingLog = { description, amount, category, card, type: 'finance_health' };
@@ -266,7 +266,7 @@
                 }
             } catch(e) { 
                 showToast(`AI 錯誤: ${e.message||'未知'}`, 'error');
-                if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
+                if(category === '食物') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
                 else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
