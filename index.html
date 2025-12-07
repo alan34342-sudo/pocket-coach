@@ -15,14 +15,23 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' style='background:%232563EB'%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-size='300' fill='white'%3E🤖%3C/text%3E%3C/svg%3E">
 
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 優化 AI 回覆的 Markdown 樣式 */
+        .ai-content h3 { font-weight: 800; margin-top: 0.5em; margin-bottom: 0.2em; color: #1e40af; }
+        .ai-content strong { color: #1f2937; font-weight: 700; }
+        .ai-content ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.5em; }
+        .ai-content li { margin-bottom: 0.2em; }
+        .ai-content p { margin-bottom: 0.5em; }
+        .safe-area-pb { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
     <script>
         // --- UI Helpers ---
         const setText = (id, text) => { const el = document.getElementById(id); if(el) el.textContent = text; };
         const setHTML = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
         const setValue = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
 
-        // --- 本地資料庫模擬 (Local Storage Wrapper) ---
-        // 資料保留關鍵：Key 前綴保持不變，換代碼資料依然存在
+        // --- 本地資料庫 (Local Storage Wrapper) ---
+        // 資料保留關鍵：Key 前綴保持不變
         const DB = {
             get: (key, defaultVal) => {
                 const data = localStorage.getItem(`pocket_coach_${key}`);
@@ -37,7 +46,7 @@
         let USER_API_KEY = ""; 
         let ACTIVE_MODEL = "gemini-1.5-flash";
         
-        // 修正時區
+        // 修正時區 (確保日期字串準確)
         const getLocalDate = () => {
             const d = new Date();
             return new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
@@ -48,7 +57,7 @@
         let selectedImageBase64 = null; 
         let window_pendingLog = {};
 
-        // Data Models (從 LocalStorage 載入)
+        // Data Models
         let accounts = [];
         let monthlyIncome = { salary: 0, bonus: 0, overtime: 0, oncall: 0 };
         let fixedExpenses = [];
@@ -68,6 +77,12 @@
             {name: '機車', note: '合庫', amount: 0, id: 7},
             {name: '電費', note: 'bank', amount: 0, id: 8}
         ];
+        
+        // Category Icons Map
+        const categoryIcons = {
+            '餐費': '🍱', '生活用品': '🧻', '電話費': '📞', '交通': '🛵',
+            '娛樂': '🎬', '投資': '🔥', '運動': '💪', '保險': '🏥', '其他': '📝'
+        };
 
         // --- 初始化 ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -83,7 +98,6 @@
             // Load Data
             userProfile = DB.get('profile', userProfile);
             
-            // 如果是第一次使用，載入預設值
             const savedAcc = DB.get('accounts', null);
             accounts = savedAcc ? savedAcc : defaultAccountsList.map(name => ({name, balance: 0}));
             
@@ -101,8 +115,9 @@
             
             const modelSelect = document.getElementById('setting-model');
             if (modelSelect) {
-                // 如果目前的 model 不在預設清單中，自動切換到 custom
-                if (['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'].includes(ACTIVE_MODEL)) {
+                // 自動偵測模型是否在預設清單
+                const defaultModels = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'];
+                if (defaultModels.includes(ACTIVE_MODEL)) {
                     modelSelect.value = ACTIVE_MODEL;
                 } else {
                     modelSelect.value = 'custom';
@@ -134,15 +149,13 @@
         // Settings - Ratio Sync Logic
         window.updateInvFromEnt = (val) => {
             let ent = parseInt(val) || 0;
-            if (ent > 100) ent = 100;
-            if (ent < 0) ent = 0;
+            if (ent > 100) ent = 100; if (ent < 0) ent = 0;
             document.getElementById('ratio-inv').value = 100 - ent;
         };
 
         window.updateEntFromInv = (val) => {
             let inv = parseInt(val) || 0;
-            if (inv > 100) inv = 100;
-            if (inv < 0) inv = 0;
+            if (inv > 100) inv = 100; if (inv < 0) inv = 0;
             document.getElementById('ratio-ent').value = 100 - inv;
         };
 
@@ -206,6 +219,7 @@
                     .sort((a, b) => b.localeCompare(a));
 
                 const select = document.getElementById('setting-model');
+                // 保留 custom
                 select.innerHTML = '';
                 chatModels.forEach(m => {
                     const opt = document.createElement('option');
@@ -220,8 +234,21 @@
             finally { btn.innerHTML = originalText; btn.disabled = false; }
         };
 
-        // --- AI Logic ---
-        const parseMarkdown = (text) => text ? text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/- (.*?)(<br>|$)/g, '• $1<br>') : '';
+        // --- AI Logic (Visual Enhanced) ---
+        const parseMarkdown = (text) => {
+            if (!text) return '';
+            let html = text
+                .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+                .replace(/^## (.*$)/gim, '<h3>$1</h3>')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/^\* (.*$)/gim, '<ul><li>$1</li></ul>')
+                .replace(/^- (.*$)/gim, '<ul><li>$1</li></ul>')
+                .replace(/\n/g, '<br>');
+            // Fix nested uls
+            html = html.replace(/<\/ul><br><ul>/g, '');
+            return `<div class="ai-content text-gray-700 leading-relaxed">${html}</div>`;
+        };
+        
         const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
         const callAI = async (prompt, imgBase64 = null) => {
@@ -306,9 +333,15 @@
                 }
             } catch(e) { 
                 showToast(`AI 錯誤: ${e.message||'未知'}`, 'error');
-                // Fallback for manual entry if AI fails
+                // Fallback for manual entry
                 if(category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
                 else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
+                else {
+                    // 如果 AI 壞了，普通記帳還是要能過
+                    commitLog({ description, amount, category, card, type: 'finance' });
+                    showToast('記帳成功 (離線)', 'success');
+                    resetLogForm();
+                }
             } 
             finally { btn.disabled=false; btn.textContent = category==='運動' ? '🔥 記錄' : '💰 記錄'; }
         };
@@ -347,10 +380,13 @@
         };
 
         const commitLog = (d) => {
+            // 強制校正當下日期，避免跨日沒刷新的問題
+            const nowStr = getLocalDate();
+            
             const logData = { 
                 id: Date.now().toString(),
                 timestamp: new Date().toISOString(), 
-                dateStr: currentDate, 
+                dateStr: nowStr, // Fix: 使用當下運算的日期
                 description: d.description, amount: d.amount, category: d.category, card: d.card, type: d.type,
                 kcal: d.kcal || 0, protein: d.protein || 0, burned: d.burned || 0
             };
@@ -360,6 +396,10 @@
                 const idx = accounts.findIndex(a=>a.name===d.card);
                 if(idx!==-1) accounts[idx].balance -= d.amount;
             }
+            
+            // 如果日期跨了，更新全域變數以刷新 UI
+            if (currentDate !== nowStr) currentDate = nowStr;
+            
             saveData();
         };
 
@@ -380,7 +420,7 @@
             const inputId = `${contextType}-chat-input`; const containerId = `${contextType}-chat-box`;
             const input = document.getElementById(inputId); const msg = input.value.trim(); if(!msg) return;
             const chatBox = document.getElementById(containerId);
-            chatBox.innerHTML += `<div class="flex justify-end mb-2"><div class="bg-blue-600 text-white py-2 px-3 rounded-2xl rounded-tr-none text-sm max-w-[80%]">${msg}</div></div>`;
+            chatBox.innerHTML += `<div class="flex justify-end mb-2"><div class="bg-blue-600 text-white py-2 px-3 rounded-2xl rounded-tr-none text-sm max-w-[85%]">${msg}</div></div>`;
             input.value = ''; chatBox.scrollTop = chatBox.scrollHeight;
             const loadingId = Date.now();
             chatBox.innerHTML += `<div id="${loadingId}" class="flex justify-start mb-2"><div class="bg-white border border-gray-200 text-gray-500 py-2 px-3 rounded-2xl rounded-tl-none text-xs">AI 思考中...</div></div>`;
@@ -395,7 +435,7 @@
                 const healthHistory = dailyLogs.filter(l => l.kcal > 0 && new Date(l.dateStr) >= sevenDaysAgo).map(l => `${l.dateStr}: ${l.description} (${l.kcal}kcal)`).join("\n");
                 const kcalIn = todayLogs.reduce((a,b)=>a+(b.kcal||0),0);
                 const burned = todayLogs.reduce((a,b)=>a+(b.burned||0),0);
-                context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日攝取${kcalIn}, 消耗${burned}, 剩餘${userProfile.targetKcal+burned-kcalIn}。近期紀錄:${healthHistory}。請回答用戶。`;
+                context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日攝取${kcalIn}, 消耗${burned}, 剩餘${userProfile.targetKcal+burned-kcalIn}。近期紀錄:${healthHistory}。請以條列式或重點整理回答用戶。`;
             } else if (contextType === 'finance') {
                 const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
                 const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
@@ -404,21 +444,20 @@
                 const invRatio = 100 - entRatio;
                 const entBudget = Math.floor(disposable * (entRatio/100));
                 const invBudget = Math.floor(disposable * (invRatio/100));
-                const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(monthStart));
                 const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
                 const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
                 const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
                 const invContext = investments.map(i => `${i.symbol}: ${i.note}`).join(", ");
                 const history = monthLogs.map(l => `${l.dateStr}: ${l.description} $${l.amount}`).join("\n");
                 
-                context = `角色:全能理財顧問。本月數據:總收入$${incomeTotal}, 固定支出$${fixedTotal}, 可支配$${disposable}。分配:娛樂${entRatio}%/投資${invRatio}%。娛樂剩餘$${entBudget - entSpent}, 投資剩餘$${invBudget - invSpent}, 總資產$${totalAsset}, 投資組合:[${invContext}]。本月流水帳:${history}。請根據以上所有數據回答。`;
+                context = `角色:全能理財顧問。本月數據:總收入$${incomeTotal}, 固定支出$${fixedTotal}, 可支配$${disposable}。分配:娛樂${entRatio}%/投資${invRatio}%。娛樂剩餘$${entBudget - entSpent}, 投資剩餘$${invBudget - invSpent}, 總資產$${totalAsset}, 投資組合:[${invContext}]。本月流水帳:${history}。請以條列式清晰回答。`;
             }
 
             try {
                 const res = await callAI(context + " 用戶問:" + msg);
                 document.getElementById(loadingId).remove();
                 const displayNum = typeof res === 'object' ? "AI 格式錯誤" : res;
-                chatBox.innerHTML += `<div class="flex justify-start mb-4"><div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center mr-2 text-lg flex-shrink-0">🤖</div><div class="bg-white text-gray-800 py-3 px-4 rounded-2xl rounded-tl-none text-sm shadow-sm border border-gray-100 max-w-[85%] leading-relaxed">${parseMarkdown(displayNum)}</div></div>`;
+                chatBox.innerHTML += `<div class="flex justify-start mb-4"><div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center mr-2 text-lg flex-shrink-0">🤖</div><div class="bg-white text-gray-800 py-3 px-4 rounded-2xl rounded-tl-none text-sm shadow-sm border border-gray-100 max-w-[90%]">${parseMarkdown(displayNum)}</div></div>`;
                 chatBox.scrollTop = chatBox.scrollHeight;
             } catch(e) { document.getElementById(loadingId).remove(); }
         };
@@ -429,7 +468,7 @@
             if(!symbol || !note) return showToast('請輸入內容', 'error');
             const btn = document.getElementById('inv-add-btn'); btn.textContent = 'AI 分析中...'; btn.disabled = true;
             try {
-                const prompt = `分析投資: ${symbol}。觀點: "${note}"。風險評估。`;
+                const prompt = `分析投資: ${symbol}。觀點: "${note}"。風險評估。請簡短回覆。`;
                 const aiFeedback = await callAI(prompt); 
                 const feedbackText = typeof aiFeedback === 'object' ? `錯誤: ${aiFeedback.error}` : aiFeedback;
                 investments.push({ id: Date.now().toString(), symbol, note, feedback: feedbackText, date: new Date().toLocaleDateString() }); 
@@ -510,6 +549,7 @@
         window.prevMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()-1); renderCalendar(); };
         window.nextMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()+1); renderCalendar(); };
         window.selectDate = (d) => { currentDate = d; refreshUI(); window.toggleCalendar(); };
+        window.jumpToToday = () => { currentDate = getLocalDate(); currentViewMonth = new Date(); refreshUI(); };
 
         const refreshUI = () => {
             const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
@@ -521,21 +561,31 @@
             const todayTotalSpend = todayLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
             
             setText('today-record-sum', `(總支出: $${todayTotalSpend})`);
-
             setText('dash-food', `$${todayTotalSpend}`);
             setText('dash-in', kcalIn);
             setText('dash-burn', kcalBurn);
             setText('dash-remain', userProfile.targetKcal + kcalBurn - kcalIn);
             setText('current-date-display', currentDate);
 
-            const logListHtml = todayLogs.length ? todayLogs.map(l=>`
+            // Log List (with Icons)
+            const logListHtml = todayLogs.length ? todayLogs.map(l=>{
+                const icon = categoryIcons[l.category] || '📝';
+                return `
                 <div class="flex justify-between p-3 border-b border-gray-100 text-sm">
-                    <div><span class="font-bold text-gray-700">${l.description}</span> <span class="text-xs text-gray-400">${l.category}</span></div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-lg">${icon}</span>
+                        <div>
+                            <div class="font-bold text-gray-700">${l.description}</div>
+                            <div class="text-[10px] text-gray-400">${l.category} ${l.card ? `· ${l.card}` : ''}</div>
+                        </div>
+                    </div>
                     <div class="text-right">
                         ${l.amount > 0 ? `<div class="font-bold">-$${l.amount}</div>` : ''}
                         ${l.kcal ? `<div class="text-[10px] text-green-500">攝 ${l.kcal}</div>` : ''}
+                        ${l.burned ? `<div class="text-[10px] text-orange-500">消 ${l.burned}</div>` : ''}
                     </div>
-                </div>`).join('') : '<div class="text-center text-gray-400 py-4">無紀錄</div>';
+                </div>`;
+            }).join('') : '<div class="text-center text-gray-400 py-4">本日無紀錄</div>';
             setHTML('log-list', logListHtml);
 
             const sel = document.getElementById('log-card');
@@ -545,12 +595,11 @@
                 if(curr && accounts.find(a=>a.name===curr)) sel.value = curr;
             }
 
-            // Fixed List Rendering (NEW Logic for Green Dot & Remaining)
+            // Fixed List Rendering
             setHTML('dash-fixed-list', fixedExpenses.map(f => {
                 const spentThisMonth = monthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
                 const remaining = f.amount - spentThisMonth;
                 const isPaid = spentThisMonth > 0;
-                const isBudget = f.note.includes('預算');
                 
                 return `
                 <div class="flex justify-between p-2 text-sm border-b items-center">
@@ -568,7 +617,7 @@
                 </div>`;
             }).join(''));
 
-            // Report Logic
+            // Report Logic & Budget Remaining
             const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
             const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
             const varTotal = monthLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
@@ -576,6 +625,10 @@
             const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
 
             const disposableIncome = incomeTotal - fixedTotal;
+            // NEW: Dashboard Remaining Display
+            const monthlyRemaining = disposableIncome - varTotal;
+            setText('dash-month-remain', `$${monthlyRemaining.toLocaleString()}`);
+
             const entRatio = userProfile.entRatio || 20;
             const invRatio = 100 - entRatio;
             
@@ -586,7 +639,7 @@
             
             setText('rep-total-inc', `$${incomeTotal.toLocaleString()}`);
             setText('rep-disposable', `$${disposableIncome.toLocaleString()}`);
-            setText('rep-final', `$${(disposableIncome - varTotal).toLocaleString()}`);
+            setText('rep-final', `$${monthlyRemaining.toLocaleString()}`);
             
             setText('rep-ent-val', `$${(entBudget - entSpent).toLocaleString()}`);
             setText('rep-ent-label', `娛樂 ${entRatio}% (預算$${entBudget})`);
@@ -609,7 +662,6 @@
             setValue('prof-height', userProfile.height);
             setValue('prof-weight', userProfile.weight);
             
-            // NEW: Set values for linked inputs
             setValue('ratio-ent', userProfile.entRatio || 20);
             setValue('ratio-inv', 100 - (userProfile.entRatio || 20));
             
@@ -655,7 +707,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-red-100 text-red-600 px-1 rounded">V14.0</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V15.0</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -669,6 +721,7 @@
             </div>
             <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 mb-1"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div>
             <div id="calendar-grid" class="grid grid-cols-7 gap-1"></div>
+            <div class="text-center mt-2"><button onclick="jumpToToday()" class="text-xs text-blue-600 font-bold border border-blue-200 px-2 py-1 rounded">跳回今天</button></div>
         </div>
     </div>
 
@@ -676,9 +729,18 @@
         
         <div id="dashboard-view" class="tab-view">
             <div class="grid grid-cols-3 gap-2 mb-4">
-                <div class="bg-white p-2 rounded-xl border border-blue-100 text-center"><div class="text-[10px] text-gray-400">今日總支出</div><div id="dash-food" class="text-xl font-black text-blue-600">$0</div></div>
-                <div class="bg-white p-2 rounded-xl border border-green-100 text-center"><div class="text-[10px] text-gray-400">攝取</div><div id="dash-in" class="text-xl font-black text-green-600">0</div></div>
-                <div class="bg-gray-800 p-2 rounded-xl text-center text-white"><div class="text-[10px] opacity-70">剩餘熱量</div><div id="dash-remain" class="text-xl font-black">1600</div></div>
+                <div class="bg-white p-2 rounded-xl border border-blue-100 text-center shadow-sm">
+                    <div class="text-[10px] text-gray-400">今日支出</div>
+                    <div id="dash-food" class="text-lg font-black text-blue-600">$0</div>
+                </div>
+                <div class="bg-white p-2 rounded-xl border border-yellow-100 text-center shadow-sm">
+                    <div class="text-[10px] text-gray-400">本月剩餘預算</div>
+                    <div id="dash-month-remain" class="text-lg font-black text-yellow-600">$0</div>
+                </div>
+                <div class="bg-gray-800 p-2 rounded-xl text-center text-white shadow-sm">
+                    <div class="text-[10px] opacity-70">剩餘熱量</div>
+                    <div id="dash-remain" class="text-lg font-black">1600</div>
+                </div>
             </div>
 
             <div class="bg-white p-4 rounded-xl shadow-md mb-4 border border-gray-200">
@@ -797,13 +859,14 @@
                     <label class="text-xs text-gray-500">Gemini Model</label>
                     <div class="flex gap-2 mb-2">
                         <select id="setting-model" onchange="handleModelChange(this.value)" class="flex-grow border p-2 rounded bg-white text-sm">
+                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (New!)</option>
                             <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
                             <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
                             <option value="custom">自訂 Model ID</option>
                         </select>
                         <button onclick="fetchGoogleModels()" class="bg-gray-100 px-3 rounded border border-gray-300 text-lg hover:bg-gray-200">🔄</button>
                     </div>
-                    <input id="setting-model-custom" type="text" placeholder="輸入 Model ID (如: gemini-pro)" class="w-full border p-2 rounded bg-gray-50 text-sm mb-2 hidden">
+                    <input id="setting-model-custom" type="text" placeholder="輸入 Model ID" class="w-full border p-2 rounded bg-gray-50 text-sm mb-2 hidden">
                     
                     <label class="text-xs text-gray-500">Gemini API Key</label>
                     <input id="setting-api-key" type="password" placeholder="貼上您的 API Key" class="w-full border p-2 rounded bg-gray-50 text-sm">
@@ -816,7 +879,7 @@
                 <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v14.0 (Fixed Updates)<br>User ID: <span id="auth-status">...</span></div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v15.0<br>(Date Fixed + AI Visuals)</div>
         </div>
     </main>
 
