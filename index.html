@@ -666,41 +666,38 @@
                 amtInput.disabled = false; 
                 btn.textContent = '💰 記錄';
                 
-                // 1. Identify Fixed Expense Link (for budget text info)
-                let budgetTextAccount = ''; // The account that holds the budget (e.g., 月預算)
+                // Logic Start
+                let targetSelectAccount = '';
                 let budgetInfo = '';
                 const fixedItem = fixedExpenses.find(f => f.name === v);
 
+                // 1. Determine Target Account & Budget Info
                 if (fixedItem) {
-                    budgetTextAccount = fixedItem.note; // e.g., '月預算' or '合庫'
+                    // Calculate Budget
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
                     const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
                     const remaining = fixedItem.amount - spent;
                     budgetInfo = ` (預算剩: $${remaining})`;
+
+                    // Determine Account Connection
+                    if (v === '餐費') {
+                        targetSelectAccount = '國泰'; // Force override per user request
+                    } else {
+                        targetSelectAccount = fixedItem.note; // Default to the note (e.g. 合庫)
+                    }
                 }
 
-                // 2. Determine which account to SELECT (The "Default")
-                let targetSelectAccount = budgetTextAccount; // Default to the fixed expense account
-
-                // **CRITICAL FIX**: Override for '餐費' - Default to '國泰' but allow user change
-                if (v === '餐費') {
-                    targetSelectAccount = '國泰';
-                }
-
-                // 3. Generate Options
-                // We map through ALL accounts to ensure the user can change it.
+                // 2. Generate Options
                 const optionsHtml = accounts.map(a => {
-                    let label = `${a.name} ($${a.balance})`;
+                    let label = `${a.name} ($${a.balance})`; // Default: Asset Inventory Connection
 
-                    // If this account tracks the budget, show the info in the LABEL, but don't force select
-                    if (a.name === budgetTextAccount && fixedItem) {
-                        label = `✔ ${a.name}${budgetInfo}`;
+                    // If this is the Linked Account for the Fixed Expense -> Connect to Fixed Expense Data
+                    if (fixedItem && a.name === targetSelectAccount) {
+                        label = `✔ ${a.name}${budgetInfo}`; 
                     }
 
-                    // Decide if this option is the one selected
                     const isSelected = (a.name === targetSelectAccount);
-
                     return `<option value="${a.name}" ${isSelected ? 'selected' : ''}>${label}</option>`;
                 }).join('') + '<option value="custom">➕ 自訂...</option>';
 
