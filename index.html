@@ -186,12 +186,23 @@
             try {
                 const data = JSON.parse(jsonStr);
                 
-                // Validate basic structure (optional but good practice)
-                if (!data.accounts && !data.monthlyIncome && !data.fixedExpenses && !data.dailyLogs) {
-                    throw new Error("無效的備份格式");
+                // 寬容處理：如果使用者只貼了紀錄陣列，詢問是否還原
+                if (Array.isArray(data)) {
+                    if(confirm("⚠️ 偵測到這似乎是一串單純的『記帳紀錄 (Array)』，而非完整備份檔。\n\n是否將其作為『記帳紀錄』匯入並覆蓋現有紀錄？")) {
+                        DB.set('logs', data);
+                        alert("紀錄匯入成功！頁面將重新整理。");
+                        location.reload();
+                        return;
+                    }
+                    return; // 使用者取消
                 }
 
-                if (confirm("⚠️ 警告：這將會覆蓋您目前所有的資料！\n確定要匯入嗎？")) {
+                // 完整備份檔檢查
+                if (!data.accounts && !data.monthlyIncome && !data.fixedExpenses && !data.dailyLogs) {
+                    throw new Error("格式無法辨識 (找不到 accounts, dailyLogs 等關鍵欄位)");
+                }
+
+                if (confirm("⚠️ 警告：這將會覆蓋您目前『所有的』設定與紀錄！\n\n確定要匯入嗎？")) {
                     if(data.accounts) DB.set('accounts', data.accounts);
                     if(data.monthlyIncome) DB.set('income', data.monthlyIncome);
                     if(data.fixedExpenses) DB.set('fixed', data.fixedExpenses);
@@ -199,11 +210,11 @@
                     if(data.dailyLogs) DB.set('logs', data.dailyLogs);
                     if(data.userProfile) DB.set('profile', data.userProfile);
                     
-                    alert("匯入成功！頁面將重新整理。");
+                    alert("資料還原成功！頁面將重新整理。");
                     location.reload();
                 }
             } catch (e) {
-                alert("匯入失敗：資料格式錯誤。\n" + e.message);
+                alert("匯入失敗：資料格式錯誤。\n錯誤訊息：" + e.message);
             }
         };
         
