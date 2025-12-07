@@ -588,13 +588,6 @@
             }).join('') : '<div class="text-center text-gray-400 py-4">本日無紀錄</div>';
             setHTML('log-list', logListHtml);
 
-            const sel = document.getElementById('log-card');
-            if(sel) {
-                const curr = sel.value;
-                sel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('') + '<option value="custom">➕ 自訂...</option>';
-                if(curr && accounts.find(a=>a.name===curr)) sel.value = curr;
-            }
-
             // Fixed List Rendering
             setHTML('dash-fixed-list', fixedExpenses.map(f => {
                 const spentThisMonth = monthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
@@ -625,7 +618,6 @@
             const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
 
             const disposableIncome = incomeTotal - fixedTotal;
-            // NEW: Dashboard Remaining Display
             const monthlyRemaining = disposableIncome - varTotal;
             setText('dash-month-remain', `$${monthlyRemaining.toLocaleString()}`);
 
@@ -666,6 +658,10 @@
             setValue('ratio-inv', 100 - (userProfile.entRatio || 20));
             
             renderCalendar();
+            
+            // Sync log category dropdown
+            const currCat = document.getElementById('log-category').value;
+            changeLogCategory(currCat);
         };
 
         window.removeFixed = async (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); await saveData('fix'); };
@@ -678,10 +674,44 @@
         };
         window.changeDate = (e) => { currentDate = e.target.value; refreshUI(); };
         window.showToast = (m,t) => { const el=document.getElementById('toast'); el.textContent=m; el.className=`fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white ${t==='error'?'bg-red-500':'bg-black'} z-50`; el.classList.remove('hidden'); setTimeout(()=>el.classList.add('hidden'),2000); };
+        
+        // ** MODIFIED: Logic for Auto Budget & Account Linking **
         window.changeLogCategory = (v) => {
-            const cardSel = document.getElementById('log-card'); const amtInput = document.getElementById('log-amount'); const btn = document.getElementById('unified-log-btn');
-            if (v === '運動') { cardSel.disabled = true; amtInput.placeholder = '無'; amtInput.value = 0; amtInput.disabled = true; btn.textContent = '🔥 記錄'; } 
-            else { cardSel.disabled = false; amtInput.placeholder = '$'; amtInput.disabled = false; btn.textContent = '💰 記錄'; }
+            const cardSel = document.getElementById('log-card'); 
+            const amtInput = document.getElementById('log-amount'); 
+            const btn = document.getElementById('unified-log-btn');
+            
+            if (v === '運動') { 
+                cardSel.disabled = true; 
+                cardSel.innerHTML = '<option>無</option>';
+                amtInput.placeholder = '無'; 
+                amtInput.value = 0; 
+                amtInput.disabled = true; 
+                btn.textContent = '🔥 記錄'; 
+            } else { 
+                // Restore inputs
+                cardSel.disabled = false; 
+                amtInput.placeholder = '$'; 
+                amtInput.disabled = false; 
+                btn.textContent = '💰 記錄';
+                
+                // Check if this category is in Fixed Expenses
+                const fixedItem = fixedExpenses.find(f => f.name === v);
+                if (fixedItem) {
+                    // Auto-Budget Mode
+                    const monthStart = currentDate.substring(0, 7);
+                    const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
+                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
+                    const remaining = fixedItem.amount - spent;
+                    const linkedAccount = fixedItem.note || '未指定'; 
+                    
+                    // Show SINGLE option with Budget info, but VALUE is the account name for deduction
+                    cardSel.innerHTML = `<option value="${linkedAccount}">✔ ${linkedAccount} (預算剩: $${remaining})</option>`;
+                } else {
+                    // Standard Account Select Mode
+                    cardSel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('') + '<option value="custom">➕ 自訂...</option>';
+                }
+            }
         };
 
         window.onload = initApp;
@@ -707,7 +737,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V15.0</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V16.0</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -879,7 +909,7 @@
                 <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v15.0<br>(Date Fixed + AI Visuals)</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v16.0<br>(Auto Budget Linking)</div>
         </div>
     </main>
 
