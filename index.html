@@ -66,7 +66,7 @@
         // Defaults
         const defaultAccountsList = ['國泰', '郵局', 'BANK', '合庫', '玉山', '聯邦'];
         const defaultFixedList = [
-            {name: '餐費', note: '國泰', amount: 0, id: 1},
+            {name: '餐費', note: '月預算', amount: 0, id: 1},
             {name: '生活用品', note: '合庫', amount: 0, id: 2},
             {name: '電話費', note: '合庫', amount: 0, id: 3},
             {name: '壽險', note: '郵局', amount: 0, id: 4},
@@ -666,14 +666,13 @@
                 amtInput.disabled = false; 
                 btn.textContent = '💰 記錄';
                 
-                // Determine default account and budget info
-                let targetAccount = '';
+                // 1. Identify Fixed Expense Link (for budget text info)
+                let budgetTextAccount = ''; // The account that holds the budget (e.g., 月預算)
                 let budgetInfo = '';
-
-                // Check for Fixed Expense Link
                 const fixedItem = fixedExpenses.find(f => f.name === v);
+
                 if (fixedItem) {
-                    targetAccount = fixedItem.note; // e.g. '合庫'
+                    budgetTextAccount = fixedItem.note; // e.g., '月預算' or '合庫'
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
                     const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
@@ -681,25 +680,26 @@
                     budgetInfo = ` (預算剩: $${remaining})`;
                 }
 
-                // Check for Specific Defaults (Overrides fixed if needed, though usually distinct)
+                // 2. Determine which account to SELECT (The "Default")
+                let targetSelectAccount = budgetTextAccount; // Default to the fixed expense account
+
+                // **CRITICAL FIX**: Override for '餐費' - Default to '國泰' but allow user change
                 if (v === '餐費') {
-                    targetAccount = '國泰';
+                    targetSelectAccount = '國泰';
                 }
 
-                // Generate Options (Show ALL accounts, but select the target)
+                // 3. Generate Options
+                // We map through ALL accounts to ensure the user can change it.
                 const optionsHtml = accounts.map(a => {
                     let label = `${a.name} ($${a.balance})`;
-                    let isSelected = false;
 
-                    // If this account is the target default
-                    if (a.name === targetAccount) {
-                        isSelected = true;
-                    }
-
-                    // If this account matches the fixed expense note, add the visual cue & budget info
-                    if (fixedItem && a.name === fixedItem.note) {
+                    // If this account tracks the budget, show the info in the LABEL, but don't force select
+                    if (a.name === budgetTextAccount && fixedItem) {
                         label = `✔ ${a.name}${budgetInfo}`;
                     }
+
+                    // Decide if this option is the one selected
+                    const isSelected = (a.name === targetSelectAccount);
 
                     return `<option value="${a.name}" ${isSelected ? 'selected' : ''}>${label}</option>`;
                 }).join('') + '<option value="custom">➕ 自訂...</option>';
