@@ -18,7 +18,7 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        // --- UI Helpers (Fixed: Added missing functions) ---
+        // --- UI Helpers ---
         const setText = (id, text) => { const el = document.getElementById(id); if(el) el.textContent = text; };
         const setHTML = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
         const setValue = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
@@ -47,6 +47,7 @@
         let currentDate = getLocalDate();
         let currentViewMonth = new Date(); 
         let selectedImageBase64 = null; 
+        let window_pendingLog = {};
 
         // Data Models (從 LocalStorage 載入)
         let accounts = [];
@@ -130,11 +131,29 @@
             return { tdee, target: tdee - 400 };
         };
 
-        // Settings
+        // Settings - Ratio Sync Logic (NEW)
+        window.updateInvFromEnt = (val) => {
+            let ent = parseInt(val) || 0;
+            if (ent > 100) ent = 100;
+            if (ent < 0) ent = 0;
+            document.getElementById('ratio-inv').value = 100 - ent;
+        };
+
+        window.updateEntFromInv = (val) => {
+            let inv = parseInt(val) || 0;
+            if (inv > 100) inv = 100;
+            if (inv < 0) inv = 0;
+            document.getElementById('ratio-ent').value = 100 - inv;
+        };
+
         window.updateSettings = () => {
+            // Note: Targeting inputs in settings-view, assuming IDs are unique in that view or we grab correct ones
+            // Since ID duplication exists with modal, we specify logic here or accept browser behavior (usually first found)
+            // But user asked to modify Settings Page, so we ensure we read from there.
             const h = parseInt(document.getElementById('prof-height').value)||172;
             const w = parseInt(document.getElementById('prof-weight').value)||69;
-            const entR = parseInt(document.getElementById('ratio-ent').value)||20;
+            const entR = parseInt(document.getElementById('ratio-ent').value)||20; // Read new input
+            
             const res = calculateTDEE(w, h);
             userProfile = { ...userProfile, height: h, weight: w, tdee: res.tdee, targetKcal: res.target, entRatio: entR };
             saveData();
@@ -314,7 +333,7 @@
             document.getElementById('verify-modal').classList.remove('hidden');
         };
 
-        window.confirmVerifyLog = () => {
+        window.confirmVerifyLog = async () => {
             const mode = window.pendingLog.type;
             let extraData = {};
             if (mode === 'finance_health') {
@@ -337,7 +356,7 @@
                 description: d.description, amount: d.amount, category: d.category, card: d.card, type: d.type,
                 kcal: d.kcal || 0, protein: d.protein || 0, burned: d.burned || 0
             };
-            dailyLogs.unshift(logData); // Add to local array
+            dailyLogs.unshift(logData);
 
             if(d.amount > 0 && d.card) {
                 const idx = accounts.findIndex(a=>a.name===d.card);
@@ -355,7 +374,7 @@
 
         window.handleImageUpload = (e) => {
             const f = e.target.files[0];
-            if(f) { const r = new FileReader(); r.onload=(ev)=>{ selectedImageBase64=ev.target.result.split(',')[1]; document.getElementById('image-preview').innerHTML=`<img src="${ev.target.result}" class="h-16 rounded object-cover shadow-sm">`; }; r.readAsDataURL(f); }
+            if(f) { const r = new FileReader(); r.onload=(ev)=>{ selectedImageBase64=ev.target.result.split(',')[1]; setHTML('image-preview', `<img src="${ev.target.result}" class="h-16 rounded object-cover shadow-sm">`); }; r.readAsDataURL(f); }
         };
 
         window.sendAIChat = async (contextType) => {
@@ -368,33 +387,33 @@
             const loadingId = Date.now();
             chatBox.innerHTML += `<div id="${loadingId}" class="flex justify-start mb-2"><div class="bg-white border border-gray-200 text-gray-500 py-2 px-3 rounded-2xl rounded-tl-none text-xs">AI 思考中...</div></div>`;
 
-            // Smart History Context
             const monthStart = currentDate.substring(0, 7);
             const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
+            const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(monthStart));
             
             let context = "";
             if(contextType === 'health') {
-                const d = new Date(); d.setDate(d.getDate() - 7);
-                const weekStr = d.toISOString().split('T')[0];
-                const healthHistory = dailyLogs.filter(l => l.kcal > 0 && l.dateStr >= weekStr).map(l => `${l.dateStr}: ${l.description} (${l.kcal}kcal)`).join("\n");
+                const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                const healthHistory = dailyLogs.filter(l => l.kcal > 0 && new Date(l.dateStr) >= sevenDaysAgo).map(l => `${l.dateStr}: ${l.description} (${l.kcal}kcal)`).join("\n");
                 const kcalIn = todayLogs.reduce((a,b)=>a+(b.kcal||0),0);
                 const burned = todayLogs.reduce((a,b)=>a+(b.burned||0),0);
-                context = `角色:營養教練。數據: ${userProfile.height}cm/${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日:攝${kcalIn}, 耗${burned}。歷史:${healthHistory}。回答用戶。`;
+                context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日攝取${kcalIn}, 消耗${burned}, 剩餘${userProfile.targetKcal+burned-kcalIn}。近期紀錄:${healthHistory}。請回答用戶。`;
             } else if (contextType === 'finance') {
-                const inc = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
-                const fix = fixedExpenses.reduce((a,b)=>a+b.amount,0);
-                const disp = inc - fix;
-                const entB = Math.floor(disp * (userProfile.entRatio/100));
-                const invB = Math.floor(disp * ((100-userProfile.entRatio)/100));
-                
+                const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
+                const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
+                const disposable = incomeTotal - fixedTotal;
+                const entRatio = userProfile.entRatio || 20;
+                const invRatio = 100 - entRatio;
+                const entBudget = Math.floor(disposable * (entRatio/100));
+                const invBudget = Math.floor(disposable * (invRatio/100));
                 const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(monthStart));
                 const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
                 const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
-                const asset = accounts.reduce((a,b)=>a+b.balance,0);
-                const inv = investments.map(i => `${i.symbol}: ${i.note}`).join(", ");
+                const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
+                const invContext = investments.map(i => `${i.symbol}: ${i.note}`).join(", ");
                 const history = monthLogs.map(l => `${l.dateStr}: ${l.description} $${l.amount}`).join("\n");
                 
-                context = `角色:理財顧問。月數據:入$${inc}, 固支$${fix}, 可用$${disp}。預算:樂${entB}(剩${entB-entS}), 投${invB}(剩${invB-invS})。資產$${asset}, 投資:[${inv}]。流水帳:${history}。回答用戶。`;
+                context = `角色:全能理財顧問。本月數據:總收入$${incomeTotal}, 固定支出$${fixedTotal}, 可支配$${disposable}。分配:娛樂${entRatio}%/投資${invRatio}%。娛樂剩餘$${entBudget - entSpent}, 投資剩餘$${invBudget - invSpent}, 總資產$${totalAsset}, 投資組合:[${invContext}]。本月流水帳:${history}。請根據以上所有數據回答。`;
             }
 
             try {
@@ -425,13 +444,13 @@
             } finally { btn.textContent = '＋ 新增並 AI 分析'; btn.disabled = false; }
         };
 
-        window.removeInvestment = (idStr) => {
+        window.removeInvestment = async (idStr) => {
             if(!confirm("確定刪除？")) return;
             investments = investments.filter(i => String(i.id) !== String(idStr));
-            saveData();
+            await saveData('inv');
         };
 
-        // --- DOM Helpers ---
+        // --- UI Utils ---
         window.openInputModal = (type, id=null) => {
             window.inputType = type; window.inputId = id;
             setValue('input-value', ''); setValue('input-note', '');
@@ -446,11 +465,11 @@
             else if(type === 'balance') { title.textContent = '資產校正'; if(id===-1) { noteContainer.classList.remove('hidden'); note.placeholder = '帳戶名稱'; } else { setValue('input-value', accounts[id].balance); noteContainer.classList.add('hidden'); } }
         };
 
-        window.submitInputModal = () => {
+        window.submitInputModal = async () => {
             const v = parseInt(document.getElementById('input-value').value)||0;
             const n = document.getElementById('input-note').value;
             if(window.inputType === 'income') { monthlyIncome[window.inputId] = v; }
-            if(window.inputType === 'fixed_add') { if(!n) return; fixedExpenses.push({id:Date.now(), name:n, amount:v, note:'預算'}); }
+            if(window.inputType === 'fixed_add') { if(!n) return; fixedExpenses.push({id:Date.now(), name:n, amount:v, note:'固定'}); }
             if(window.inputType === 'fixed_edit') { const idx = fixedExpenses.findIndex(f=>f.id===window.inputId); if(idx!==-1) fixedExpenses[idx].amount = v; }
             if(window.inputType === 'balance') { if(window.inputId === -1) { if(!n) return; accounts.push({name:n, balance:v}); } else { accounts[window.inputId].balance = v; } }
             saveData();
@@ -460,7 +479,7 @@
         window.openModal = (id) => document.getElementById(`${id}-modal`).classList.remove('hidden');
         window.closeModal = (id) => document.getElementById(`${id}-modal`).classList.add('hidden');
 
-        // --- Calendar ---
+        // --- CALENDAR ---
         window.toggleCalendar = () => {
             const cal = document.getElementById('calendar-wrapper');
             if(cal.classList.contains('hidden')) { cal.classList.remove('hidden'); renderCalendar(); }
@@ -494,7 +513,6 @@
         window.nextMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()+1); renderCalendar(); };
         window.selectDate = (d) => { currentDate = d; refreshUI(); window.toggleCalendar(); };
 
-        // --- Render ---
         const refreshUI = () => {
             const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
             const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(currentDate.substring(0,7)));
@@ -505,6 +523,7 @@
             const todayTotalSpend = todayLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
             
             setText('today-record-sum', `(總支出: $${todayTotalSpend})`);
+
             setText('dash-food', `$${todayTotalSpend}`);
             setText('dash-in', kcalIn);
             setText('dash-burn', kcalBurn);
@@ -531,32 +550,33 @@
             setHTML('dash-fixed-list', fixedExpenses.map(f => {
                 const spentThisMonth = monthLogs.filter(l => l.category === f.name).reduce((a,b) => a + (b.amount||0), 0);
                 const remaining = f.amount - spentThisMonth;
-                return `<div class="flex justify-between p-2 text-sm border-b items-center"><div><div class="font-medium">${f.name}</div><div class="text-xs text-gray-400">${f.note}</div></div><div class="flex items-center"><div class="text-right mr-3"><div class="text-xs text-gray-400">剩餘</div><span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded ${remaining < 0 ? 'text-red-500' : 'text-green-600'}" onclick="openInputModal('fixed_edit', ${f.id})">$${remaining}</span></div><button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button></div></div>`;
+                const isBudget = f.note.includes('預算');
+                return `
+                <div class="flex justify-between p-2 text-sm border-b items-center">
+                    <div><div class="font-medium">${f.name}</div><div class="text-xs text-gray-400">${f.note}</div></div>
+                    <div class="flex items-center"><div class="text-right mr-3">${isBudget ? `<div class="text-xs text-gray-400">剩餘</div>` : ''}<span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded ${remaining < 0 ? 'text-red-500' : (isBudget ? 'text-green-600' : 'text-gray-800')}" onclick="openInputModal('fixed_edit', ${f.id})">${isBudget ? `$${remaining}` : `$${f.amount}`}</span></div><button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button></div>
+                </div>`;
             }).join(''));
 
-            // Report
+            // Report Logic
             const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
             const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
-            
-            // Logic Fix: Disposable = Income - Fixed Budget
-            const disposableIncome = incomeTotal - fixedTotal;
-            
-            // Logic Fix: Spending outside of fixed budget
-            const discretionarySpending = monthLogs.filter(l => l.type.includes('finance') && !fixedExpenses.some(f => f.name === l.category)).reduce((a,b)=>a+(b.amount||0),0);
+            const varTotal = monthLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
+            const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
+            const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
 
+            const disposableIncome = incomeTotal - fixedTotal;
             const entRatio = userProfile.entRatio || 20;
             const invRatio = 100 - entRatio;
             
             const entBudget = Math.floor(disposableIncome * (entRatio / 100));
             const invBudget = Math.floor(disposableIncome * (invRatio / 100));
-            const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
-            const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
 
             ['salary','bonus','overtime','oncall'].forEach(k => { const el=document.getElementById(`inc-${k}`); if(el) el.value=monthlyIncome[k]; });
             
             setText('rep-total-inc', `$${incomeTotal.toLocaleString()}`);
             setText('rep-disposable', `$${disposableIncome.toLocaleString()}`);
-            setText('rep-final', `$${(disposableIncome - discretionarySpending).toLocaleString()}`);
+            setText('rep-final', `$${(disposableIncome - varTotal).toLocaleString()}`);
             
             setText('rep-ent-val', `$${(entBudget - entSpent).toLocaleString()}`);
             setText('rep-ent-label', `娛樂 ${entRatio}% (預算$${entBudget})`);
@@ -578,36 +598,85 @@
 
             setValue('prof-height', userProfile.height);
             setValue('prof-weight', userProfile.weight);
+            
+            // NEW: Set values for linked inputs
             setValue('ratio-ent', userProfile.entRatio || 20);
-            setText('ratio-inv-display', `${100 - (userProfile.entRatio||20)}%`);
+            setValue('ratio-inv', 100 - (userProfile.entRatio || 20));
+            
             renderCalendar();
         };
 
-        window.removeFixed = (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); saveData(); };
-        window.switchTab = (t) => { document.querySelectorAll('.tab-view').forEach(e=>e.classList.add('hidden')); document.getElementById(`${t}-view`).classList.remove('hidden'); document.querySelectorAll('.nav-btn').forEach(e=>e.classList.remove('text-blue-600')); document.getElementById(`nav-${t}`).classList.add('text-blue-600'); refreshUI(); };
+        window.removeFixed = async (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); await saveData('fix'); };
+        window.switchTab = (t) => {
+            document.querySelectorAll('.tab-view').forEach(e=>e.classList.add('hidden'));
+            document.getElementById(`${t}-view`).classList.remove('hidden');
+            document.querySelectorAll('.nav-btn').forEach(e=>e.classList.remove('text-blue-600'));
+            document.getElementById(`nav-${t}`).classList.add('text-blue-600');
+            refreshUI();
+        };
         window.changeDate = (e) => { currentDate = e.target.value; refreshUI(); };
         window.showToast = (m,t) => { const el=document.getElementById('toast'); el.textContent=m; el.className=`fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white ${t==='error'?'bg-red-500':'bg-black'} z-50`; el.classList.remove('hidden'); setTimeout(()=>el.classList.add('hidden'),2000); };
-        window.changeLogCategory = (v) => { const cardSel = document.getElementById('log-card'); const amtInput = document.getElementById('log-amount'); const btn = document.getElementById('unified-log-btn'); if (v === '運動') { cardSel.disabled = true; amtInput.placeholder = '無'; amtInput.value = 0; amtInput.disabled = true; btn.textContent = '🔥 記錄'; } else { cardSel.disabled = false; amtInput.placeholder = '$'; amtInput.disabled = false; btn.textContent = '💰 記錄'; } };
+        window.changeLogCategory = (v) => {
+            const cardSel = document.getElementById('log-card'); const amtInput = document.getElementById('log-amount'); const btn = document.getElementById('unified-log-btn');
+            if (v === '運動') { cardSel.disabled = true; amtInput.placeholder = '無'; amtInput.value = 0; amtInput.disabled = true; btn.textContent = '🔥 記錄'; } 
+            else { cardSel.disabled = false; amtInput.placeholder = '$'; amtInput.disabled = false; btn.textContent = '💰 記錄'; }
+        };
+
+        window.onload = initApp;
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
     <div id="toast" class="hidden"></div>
 
-    <!-- Modals -->
-    <div id="verify-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"><div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl"><h3 id="verify-title" class="font-bold mb-4 text-lg">確認</h3><div id="verify-inputs"></div><div class="flex gap-2 mt-4"><button onclick="closeModal('verify')" class="flex-1 bg-gray-100 py-2 rounded font-bold text-gray-500">取消</button><button onclick="confirmVerifyLog()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold shadow-lg">確認存檔</button></div></div></div>
-    <div id="input-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"><div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl"><h3 id="input-modal-title" class="font-bold mb-4 text-lg">輸入</h3><div class="mb-3"><div id="input-note-container"><input id="input-note" type="text" class="w-full border p-2 rounded mb-2" placeholder="名稱"></div><label id="input-label" class="text-xs text-gray-500">數值</label><input id="input-value" type="number" class="w-full border p-2 rounded font-bold text-lg"></div><div class="flex gap-2"><button onclick="closeModal('input')" class="flex-1 bg-gray-100 py-2 rounded">取消</button><button onclick="submitInputModal()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold">確定</button></div></div></div>
+    <!-- Modals (Verify & Input) -->
+    <div id="verify-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
+            <h3 id="verify-title" class="font-bold mb-4 text-lg">確認</h3>
+            <div id="verify-inputs"></div>
+            <div class="flex gap-2 mt-4"><button onclick="closeModal('verify')" class="flex-1 bg-gray-100 py-2 rounded font-bold text-gray-500">取消</button><button onclick="confirmVerifyLog()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold shadow-lg">確認存檔</button></div>
+        </div>
+    </div>
+    <div id="input-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
+            <h3 id="input-modal-title" class="font-bold mb-4 text-lg">輸入資料</h3>
+            <div class="mb-3"><div id="input-note-container"><input id="input-note" type="text" class="w-full border p-2 rounded mb-2" placeholder="名稱"></div><label id="input-label" class="text-xs text-gray-500">數值</label><input id="input-value" type="number" class="w-full border p-2 rounded font-bold text-lg"></div>
+            <div class="flex gap-2"><button onclick="closeModal('input')" class="flex-1 bg-gray-100 py-2 rounded">取消</button><button onclick="submitInputModal()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold">確定</button></div>
+        </div>
+    </div>
 
-    <!-- Header -->
-    <div class="bg-white p-3 shadow-sm sticky top-0 z-20"><div class="flex justify-between items-center"><div class="font-black text-lg">Pocket Coach <span class="text-xs bg-red-100 text-red-600 px-1 rounded">V13.1</span></div><div class="flex items-center gap-2"><span id="current-date-display" class="font-bold text-lg text-gray-700"></span><button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 月曆</button></div></div><div id="calendar-wrapper" class="hidden mt-3 border-t pt-2"><div class="flex justify-between items-center mb-2 px-2"><button onclick="prevMonth()" class="text-gray-400 hover:text-black font-bold">◀</button><span id="current-month-label" class="text-sm font-bold w-20 text-center">...</span><button onclick="nextMonth()" class="text-gray-400 hover:text-black font-bold">▶</button></div><div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 mb-1"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div><div id="calendar-grid" class="grid grid-cols-7 gap-1"></div></div></div>
+    <!-- Header (Compact & Calendar Toggle) -->
+    <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
+        <div class="flex justify-between items-center">
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-red-100 text-red-600 px-1 rounded">V13.7</span></div>
+            <div class="flex items-center gap-2">
+                <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
+                <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
+            </div>
+        </div>
+        <!-- Collapsible Calendar -->
+        <div id="calendar-wrapper" class="hidden mt-3 border-t pt-2">
+            <div class="flex justify-between items-center mb-2 px-2">
+                <button onclick="prevMonth()" class="text-gray-400 hover:text-black font-bold">◀</button>
+                <span id="current-month-label" class="text-sm font-bold w-20 text-center">...</span>
+                <button onclick="nextMonth()" class="text-gray-400 hover:text-black font-bold">▶</button>
+            </div>
+            <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 mb-1"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div>
+            <div id="calendar-grid" class="grid grid-cols-7 gap-1"></div>
+        </div>
+    </div>
 
     <main class="max-w-md mx-auto p-3">
+        
         <!-- Tab 1: Dashboard -->
         <div id="dashboard-view" class="tab-view">
+            <!-- Stats -->
             <div class="grid grid-cols-3 gap-2 mb-4">
-                <div class="bg-white p-2 rounded-xl border border-blue-100 text-center"><div class="text-[10px] text-gray-400">今日支出</div><div id="dash-food" class="text-xl font-black text-blue-600">$0</div></div>
+                <div class="bg-white p-2 rounded-xl border border-blue-100 text-center"><div class="text-[10px] text-gray-400">今日總支出</div><div id="dash-food" class="text-xl font-black text-blue-600">$0</div></div>
                 <div class="bg-white p-2 rounded-xl border border-green-100 text-center"><div class="text-[10px] text-gray-400">攝取</div><div id="dash-in" class="text-xl font-black text-green-600">0</div></div>
                 <div class="bg-gray-800 p-2 rounded-xl text-center text-white"><div class="text-[10px] opacity-70">剩餘熱量</div><div id="dash-remain" class="text-xl font-black">1600</div></div>
             </div>
+
+            <!-- Log Form -->
             <div class="bg-white p-4 rounded-xl shadow-md mb-4 border border-gray-200">
                 <div class="flex gap-2 mb-2">
                     <select id="log-category" onchange="changeLogCategory(this.value)" class="bg-gray-50 border p-2 rounded text-sm w-1/3"><option value="餐費">🍱 餐費</option><option value="運動">🔥 運動</option><option value="生活">🧻 生活</option><option value="交通">🛵 交通</option><option value="娛樂">🎬 娛樂</option><option value="投資">📈 投資</option><option value="其他">📝 其他</option></select>
@@ -622,23 +691,33 @@
                 <div id="image-preview" class="mb-2 flex justify-start"></div>
                 <button id="unified-log-btn" onclick="handleUnifiedLog()" class="w-full bg-gray-800 text-white py-3 rounded-lg font-bold shadow-lg">💰 記錄</button>
             </div>
+
+            <!-- AI Health Chat -->
             <div class="bg-white rounded-xl shadow-sm border border-green-200 p-4 mb-4">
                 <h3 class="font-bold text-green-700 text-sm mb-3 flex items-center border-b border-green-100 pb-2"><span class="text-lg mr-2">🥗</span> AI 營養教練</h3>
                 <div id="health-chat-box" class="h-40 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">有什麼飲食問題想問我嗎？</div></div>
                 <div class="flex gap-2"><input id="health-chat-input" type="text" placeholder="問教練..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('health')" class="bg-green-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
             </div>
+
+            <!-- Log List -->
             <div class="bg-white rounded-xl shadow-sm p-3 mb-4">
-                <div class="flex justify-between items-center mb-2"><h3 class="text-xs font-bold text-gray-400">今日紀錄</h3><span id="today-record-sum" class="text-xs font-bold text-blue-600"></span></div>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold text-gray-400">今日紀錄</h3>
+                    <span id="today-record-sum" class="text-xs font-bold text-blue-600"></span>
+                </div>
                 <div id="log-list"></div>
             </div>
+
+            <!-- Fixed Expenses (Moved to Bottom) -->
             <div class="bg-white rounded-xl shadow-sm p-4 border border-red-100">
                 <div class="flex justify-between items-center mb-2 border-b pb-2"><h3 class="font-bold text-red-800 text-sm">🔒 每月固定支出</h3><button onclick="openInputModal('fixed_add')" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">＋ 新增</button></div>
                 <div id="dash-fixed-list"></div>
             </div>
         </div>
 
-        <!-- Tab 2: Finance -->
+        <!-- Tab 2: Finance Report -->
         <div id="finance-view" class="tab-view hidden">
+            <!-- Summary -->
             <div class="bg-white rounded-xl shadow-lg border border-gray-200 p-4 mb-4 text-center">
                 <div class="text-sm text-gray-500">可支配所得 (收入-固定)</div>
                 <div id="rep-disposable" class="text-2xl font-black text-blue-600 mb-2">$0</div>
@@ -646,8 +725,10 @@
                     <div class="flex-1 bg-yellow-50 p-1 rounded text-yellow-700"><span id="rep-ent-label">娛樂剩餘</span> <span id="rep-ent-val" class="font-bold block text-lg">$0</span></div>
                     <div class="flex-1 bg-green-50 p-1 rounded text-green-700"><span id="rep-inv-label">投資剩餘</span> <span id="rep-inv-val" class="font-bold block text-lg">$0</span></div>
                 </div>
-                <div class="bg-gray-900 text-white p-3 rounded-lg"><div class="text-xs opacity-70">最終餘額 (可支配 - 額外支出)</div><div class="text-lg font-bold"> <span id="rep-final" class="text-xl">$0</span></div></div>
+                <div class="bg-gray-900 text-white p-3 rounded-lg"><div class="text-xs opacity-70">最終餘額 (可支配 - 變動支出)</div><div class="text-lg font-bold"> <span id="rep-final" class="text-xl">$0</span></div></div>
             </div>
+
+            <!-- Income -->
             <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
                 <h3 class="font-bold border-b pb-2 mb-2">收入</h3>
                 <div class="grid grid-cols-2 gap-4 text-sm mb-2">
@@ -658,6 +739,8 @@
                 </div>
                 <div class="flex justify-between font-bold text-green-600 bg-green-50 p-2 rounded"><span>總計</span><span id="rep-total-inc">$0</span></div>
             </div>
+
+            <!-- Assets -->
             <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-blue-100">
                 <div class="flex justify-between border-b pb-2 mb-2"><h3 class="font-bold text-blue-800 text-sm">🏦 資產庫存</h3><button onclick="openInputModal('balance', -1)" class="text-xs text-blue-600">＋ 帳戶</button></div>
                 <div id="rep-acc-list"></div>
@@ -666,16 +749,17 @@
 
         <!-- Tab 3: Investment -->
         <div id="investment-view" class="tab-view hidden">
+            <!-- AI Investment Chat -->
             <div class="bg-white rounded-xl shadow-sm border border-indigo-200 p-4 mb-4">
-                <h3 class="font-bold text-indigo-700 text-sm mb-3 flex items-center border-b border-indigo-100 pb-2"><span class="text-lg mr-2">📈</span> 投資顧問</h3>
+                <h3 class="font-bold text-indigo-700 text-sm mb-3 flex items-center border-b border-indigo-100 pb-2"><span class="text-lg mr-2">📈</span> 投資顧問 (全知模式)</h3>
                 <div id="finance-chat-box" class="h-64 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">我可以分析您的持股狀況...</div></div>
-                <div class="flex gap-2"><input id="finance-chat-input" type="text" placeholder="問顧問..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('finance')" class="bg-indigo-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
+                <div class="flex gap-2"><input id="finance-chat-input" type="text" placeholder="問顧問: 我還能投資嗎..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('finance')" class="bg-indigo-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
             </div>
             <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-gray-200">
                 <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">我的投資筆記</h3>
                 <div class="bg-gray-50 p-3 rounded-xl mb-3">
-                    <div class="flex gap-2 mb-2"><input id="inv-symbol" type="text" placeholder="代號" class="w-1/3 p-2 rounded border border-gray-200 text-sm"><input id="inv-note" type="text" placeholder="觀點" class="w-2/3 p-2 rounded border border-gray-200 text-sm"></div>
-                    <button id="inv-add-btn" onclick="addInvestment()" class="w-full bg-gray-800 text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700">＋ 新增</button>
+                    <div class="flex gap-2 mb-2"><input id="inv-symbol" type="text" placeholder="代號 (如: 2330)" class="w-1/3 p-2 rounded border border-gray-200 text-sm"><input id="inv-note" type="text" placeholder="觀點 (如: 看好AI)" class="w-2/3 p-2 rounded border border-gray-200 text-sm"></div>
+                    <button id="inv-add-btn" onclick="addInvestment()" class="w-full bg-gray-800 text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700">＋ 新增並 AI 分析</button>
                 </div>
                 <div id="inv-list"></div>
             </div>
@@ -683,8 +767,31 @@
 
         <!-- Tab 4: Settings -->
         <div id="settings-view" class="tab-view hidden">
+            <!-- Profile -->
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">設定</h3>
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">👤 體態設定</h3>
+                <div class="mb-3"><label class="text-xs text-gray-500">身高 (cm)</label><input id="prof-height" type="number" class="w-full border p-2 rounded mb-2"><label class="text-xs text-gray-500">體重 (kg)</label><input id="prof-weight" type="number" class="w-full border p-2 rounded"></div>
+            </div>
+
+            <!-- Financial Config (NEW: Linked Inputs) -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">⚖️ 理財分配設定</h3>
+                <div class="flex items-center gap-4 mb-3">
+                    <div class="flex-1">
+                        <label class="text-xs text-yellow-600 block mb-1">娛樂佔比 (%)</label>
+                        <input id="ratio-ent" type="number" oninput="updateInvFromEnt(this.value)" class="w-full border p-2 rounded font-bold text-center text-yellow-700">
+                    </div>
+                    <div class="flex-1">
+                        <label class="text-xs text-green-600 block mb-1">投資佔比 (%)</label>
+                        <input id="ratio-inv" type="number" oninput="updateEntFromInv(this.value)" class="w-full border p-2 rounded font-bold text-center text-green-700">
+                    </div>
+                </div>
+                <button onclick="updateSettings()" class="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-sm">儲存設定 (體態與比例)</button>
+            </div>
+
+            <!-- API Key -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">🤖 AI 模型設定</h3>
                 <div class="mb-3">
                     <label class="text-xs text-gray-500">Gemini Model</label>
                     <div class="flex gap-2 mb-2">
@@ -695,30 +802,21 @@
                         </select>
                         <button onclick="fetchGoogleModels()" class="bg-gray-100 px-3 rounded border border-gray-300 text-lg hover:bg-gray-200">🔄</button>
                     </div>
-                    <input id="setting-model-custom" type="text" placeholder="Model ID" class="w-full border p-2 rounded bg-gray-50 text-sm mb-2 hidden">
-                    <label class="text-xs text-gray-500">API Key</label>
-                    <input id="setting-api-key" type="password" class="w-full border p-2 rounded bg-gray-50 text-sm">
+                    <input id="setting-model-custom" type="text" placeholder="輸入 Model ID (如: gemini-pro)" class="w-full border p-2 rounded bg-gray-50 text-sm mb-2 hidden">
+                    
+                    <label class="text-xs text-gray-500">Gemini API Key</label>
+                    <input id="setting-api-key" type="password" placeholder="貼上您的 API Key" class="w-full border p-2 rounded bg-gray-50 text-sm">
                 </div>
-                <button onclick="saveSystemConfig()" class="w-full bg-gray-800 text-white py-2 rounded-lg font-bold text-sm">儲存設定</button>
-            </div>
-            
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">👤 體態 & 比例</h3>
-                <div class="mb-3 flex gap-2">
-                    <input id="prof-height" type="number" placeholder="身高" class="w-1/2 border p-2 rounded">
-                    <input id="prof-weight" type="number" placeholder="體重" class="w-1/2 border p-2 rounded">
-                </div>
-                <div class="mb-3">
-                    <label class="text-xs text-yellow-600">娛樂佔比 (%)</label>
-                    <input id="ratio-ent" type="number" oninput="updateRatioDisplay(this.value)" class="w-full border p-2 rounded text-center text-yellow-700">
-                </div>
-                <button onclick="updateSettings()" class="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-sm">更新資料</button>
+                <button onclick="saveSystemConfig()" class="w-full bg-gray-800 text-white py-2 rounded-lg font-bold text-sm">儲存 Key 與模型</button>
             </div>
 
+            <!-- Export -->
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出備份 (JSON)</button>
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">📦 資料備份</h3>
+                <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">V13.1 Offline Mode</div>
+            
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v13.7 (Ratio Edit)<br>User ID: <span id="auth-status">...</span></div>
         </div>
     </main>
 
