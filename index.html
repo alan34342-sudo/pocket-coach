@@ -66,7 +66,7 @@
         // Defaults
         const defaultAccountsList = ['國泰', '郵局', 'BANK', '合庫', '玉山', '聯邦'];
         const defaultFixedList = [
-            {name: '餐費', note: '國泰', amount: 8000, id: 1}, 
+            {name: '食物', note: '國泰', amount: 8000, id: 1},  // 已更名為 食物, 預設綁定國泰
             {name: '生活用品', note: '合庫', amount: 1000, id: 2},
             {name: '電話費', note: '合庫', amount: 500, id: 3},
             {name: '壽險', note: '郵局', amount: 3000, id: 4},
@@ -77,7 +77,8 @@
         ];
         
         const categoryIcons = {
-            '餐費': '🍱', '生活用品': '🧻', '電話費': '📞', '交通': '🛵', '交通/機車': '🛵',
+            '食物': '🍱', '餐費': '🍱', // 兼容舊名
+            '生活用品': '🧻', '電話費': '📞', '交通': '🛵', '交通/機車': '🛵',
             '娛樂': '🎬', '投資': '🔥', '運動': '💪', '保險': '🏥', '保險/醫療': '🏥', 
             '其他': '📝', '電費': '⚡', '壽險': '🏥', '筆電': '💻', '機車': '🛵'
         };
@@ -245,7 +246,8 @@
             btn.disabled = true; btn.textContent = 'AI 運算中...';
 
             try {
-                if(category === '餐費') {
+                // Modified condition to support '食物' (Food)
+                if(category === '食物' || category === '餐費') {
                     const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                     if(res.error) throw new Error(res.error);
                     window.pendingLog = { description, amount, category, card, type: 'finance_health' };
@@ -264,7 +266,7 @@
                 }
             } catch(e) { 
                 showToast(`AI 錯誤: ${e.message||'未知'}`, 'error');
-                if(category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
+                if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
                 else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
@@ -690,21 +692,32 @@
         const updateCategoryDropdown = () => {
             const select = document.getElementById('log-category');
             const currentVal = select.value;
-            // Base categories
-            const baseCats = ['餐費', '生活用品', '電話費', '交通/機車', '娛樂', '投資', '運動', '保險/醫療', '其他'];
-            // Get names from fixed expenses
-            const fixedNames = fixedExpenses.map(f => f.name);
-            // Merge and dedup
-            const allCats = [...new Set([...baseCats, ...fixedNames])];
+            
+            // Get names from fixed expenses ONLY (As requested: strictly follow fixed expenses)
+            // But we need to sort '食物' to the top if it exists
+            let fixedNames = fixedExpenses.map(f => f.name);
+            
+            // Remove '食物' from list first to re-insert at top
+            fixedNames = fixedNames.filter(n => n !== '食物');
+            
+            // Check if '食物' exists in fixedExpenses data, if so, put it first
+            const hasFood = fixedExpenses.some(f => f.name === '食物');
+            
+            let finalCats = [];
+            if (hasFood) {
+                finalCats = ['食物', ...fixedNames];
+            } else {
+                finalCats = fixedNames;
+            }
 
-            select.innerHTML = allCats.map(c => {
+            select.innerHTML = finalCats.map(c => {
                 const icon = categoryIcons[c] || '📝'; 
                 return `<option value="${c}">${icon} ${c}</option>`;
             }).join('');
             
-            // Restore selection if valid, otherwise default
-            if(allCats.includes(currentVal)) select.value = currentVal;
-            else select.value = '餐費';
+            // Restore selection if valid, otherwise default to first item
+            if(finalCats.includes(currentVal)) select.value = currentVal;
+            else if(finalCats.length > 0) select.value = finalCats[0];
         };
 
         window.changeLogCategory = (v) => {
