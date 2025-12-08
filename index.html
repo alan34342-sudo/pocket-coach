@@ -29,14 +29,24 @@
         const setHTML = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
         const setValue = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
 
-        // --- Local Storage ---
+        // --- Local Storage (Safe Mode) ---
         const DB = {
             get: (key, defaultVal) => {
-                const data = localStorage.getItem(`pocket_coach_${key}`);
-                return data ? JSON.parse(data) : defaultVal;
+                try {
+                    const data = localStorage.getItem(`pocket_coach_${key}`);
+                    return data ? JSON.parse(data) : defaultVal;
+                } catch (e) {
+                    console.error(`DB Load Error (${key}):`, e);
+                    return defaultVal;
+                }
             },
             set: (key, val) => {
-                localStorage.setItem(`pocket_coach_${key}`, JSON.stringify(val));
+                try {
+                    localStorage.setItem(`pocket_coach_${key}`, JSON.stringify(val));
+                } catch (e) {
+                    console.error(`DB Save Error (${key}):`, e);
+                    alert("儲存失敗：可能是手機儲存空間已滿");
+                }
             }
         };
 
@@ -52,7 +62,7 @@
         let currentDate = getLocalDate();
         let currentViewMonth = new Date(); 
         let selectedImageBase64 = null; 
-        let window_pendingLog = {};
+        let pendingLogData = {}; // Renamed to avoid confusion
 
         // Data Models
         let accounts = [];
@@ -60,7 +70,6 @@
         let fixedExpenses = [];
         let investments = []; 
         let dailyLogs = [];
-        // UPDATED DEFAULT: Target set to 1760 based on (2260 - 500)
         let userProfile = { height: 172, weight: 69, age: 25, tdee: 2268, targetKcal: 1760, entRatio: 20 };
 
         // Defaults
@@ -94,7 +103,7 @@
             ACTIVE_MODEL = localStorage.getItem('gemini_model') || "gemini-1.5-flash";
             
             userProfile = DB.get('profile', userProfile);
-            // Ensure age exists (migration)
+            // Migration: Ensure age exists
             if(!userProfile.age) userProfile.age = 25;
 
             const savedAcc = DB.get('accounts', null);
@@ -132,13 +141,12 @@
             refreshUI();
         };
 
-        // --- Core Calc (Updated for Age & -500 Deficit) ---
+        // --- Core Calc ---
         const calculateTDEE = (w, h, age) => {
             // Mifflin-St Jeor (Male)
             const bmr = (10 * w) + (6.25 * h) - (5 * age) + 5;
             const tdee = Math.round(bmr * 1.375); // Lightly active
-            // UPDATED: Changed deficit from 400 to 500 for better fat loss target
-            return { tdee, target: tdee - 500 }; 
+            return { tdee, target: tdee - 500 }; // Deficit -500
         };
 
         window.updateInvFromEnt = (val) => { let ent = parseInt(val) || 0; if (ent > 100) ent = 100; if (ent < 0) ent = 0; document.getElementById('ratio-inv').value = 100 - ent; };
@@ -284,7 +292,7 @@
             });
         };
 
-        // --- Log & Action (UPDATED: Manual Mode) ---
+        // --- Log & Action ---
         window.handleUnifiedLog = async () => {
             const description = document.getElementById('log-description').value;
             const amount = parseInt(document.getElementById('log-amount').value)||0;
@@ -316,7 +324,7 @@
                         btn.textContent = 'AI 分析中...';
                         const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                         if(res.error) throw new Error(res.error);
-                        window.pendingLog = { description, amount, category, card, type: 'finance_health' };
+                        pendingLogData = { description, amount, category, card, type: 'finance_health' };
                         setupVerifyModal('food', res);
                     }
                 } 
@@ -330,7 +338,7 @@
                         btn.textContent = 'AI 分析中...';
                         const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。請只回傳JSON格式: {"burned": 數字}。`);
                         if(res.error) throw new Error(res.error);
-                        window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' };
+                        pendingLogData = { description, amount: 0, category, card: '', type: 'exercise' };
                         setupVerifyModal('exercise', res);
                     }
                 } 
@@ -342,8 +350,8 @@
             } catch(e) { 
                 showToast(`錯誤: ${e.message||'未知'}`, 'error');
                 // Fallback for AI fail
-                if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
-                else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
+                if(category === '食物' || category === '餐費') { pendingLogData = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
+                else if(category === '運動') { pendingLogData = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
                     showToast('記帳成功 (離線)', 'success');
@@ -367,11 +375,11 @@
         };
 
         window.confirmVerifyLog = async () => {
-            const mode = window.pendingLog.type;
+            const mode = pendingLogData.type;
             let extraData = {};
             if (mode === 'finance_health') { extraData.kcal = parseInt(document.getElementById('verify-kcal').value) || 0; extraData.protein = parseInt(document.getElementById('verify-protein').value) || 0; } 
             else if (mode === 'exercise') { extraData.burned = parseInt(document.getElementById('verify-burned').value) || 0; }
-            commitLog({ ...window.pendingLog, ...extraData });
+            commitLog({ ...pendingLogData, ...extraData });
             closeModal('verify');
             showToast('紀錄完成', 'success');
             resetLogForm();
@@ -718,13 +726,11 @@
             changeLogCategory(currCat);
         };
 
-        // --- Logic: Updated for Manual Inputs Visibility ---
         window.changeLogCategory = (v) => {
             const cardSel = document.getElementById('log-card'); 
             const amtInput = document.getElementById('log-amount'); 
             const btn = document.getElementById('unified-log-btn');
             
-            // Manual Input Logic
             const manualDiv = document.getElementById('manual-inputs');
             const manualKcal = document.getElementById('manual-kcal');
             const manualProtBurn = document.getElementById('manual-prot-burn');
@@ -737,7 +743,7 @@
             } else if (v === '運動') {
                 manualDiv.classList.remove('hidden');
                 manualKcal.placeholder = '消耗 (手動)';
-                manualProtBurn.classList.add('hidden'); // Hide protein for exercise
+                manualProtBurn.classList.add('hidden'); 
             } else {
                 manualDiv.classList.add('hidden');
             }
@@ -798,7 +804,8 @@
             }
         };
 
-        window.onload = initApp;
+        // --- Remove the erroneous window.onload ---
+        // window.onload = initApp; // 移除此行，因為 initApp 未定義
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
@@ -837,7 +844,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V19.0</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V20.0 (Rescue)</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -1015,7 +1022,7 @@
                 </div>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v19.0<br>(Smart Deficit -500)</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v20.0<br>(Rescue Edition)</div>
         </div>
     </main>
 
