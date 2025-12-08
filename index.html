@@ -16,6 +16,7 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        /* 優化 AI 回覆的 Markdown 樣式 */
         .ai-content h3 { font-weight: 800; margin-top: 0.5em; margin-bottom: 0.2em; color: #1e40af; }
         .ai-content strong { color: #1f2937; font-weight: 700; }
         .ai-content ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.5em; }
@@ -29,28 +30,22 @@
         const setHTML = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
         const setValue = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
 
-        // --- Local Storage (Safe Mode) ---
+        // --- 本地資料庫 (Local Storage Wrapper with Safety) ---
         const DB = {
             get: (key, defaultVal) => {
                 try {
                     const data = localStorage.getItem(`pocket_coach_${key}`);
                     return data ? JSON.parse(data) : defaultVal;
-                } catch (e) {
-                    console.error(`DB Load Error (${key}):`, e);
-                    return defaultVal;
-                }
+                } catch(e) { console.error(e); return defaultVal; }
             },
             set: (key, val) => {
                 try {
                     localStorage.setItem(`pocket_coach_${key}`, JSON.stringify(val));
-                } catch (e) {
-                    console.error(`DB Save Error (${key}):`, e);
-                    alert("儲存失敗：可能是手機儲存空間已滿");
-                }
+                } catch(e) { alert("儲存空間不足或錯誤"); }
             }
         };
 
-        // --- Global Vars ---
+        // --- 全域變數 ---
         let USER_API_KEY = ""; 
         let ACTIVE_MODEL = "gemini-1.5-flash";
         
@@ -62,7 +57,7 @@
         let currentDate = getLocalDate();
         let currentViewMonth = new Date(); 
         let selectedImageBase64 = null; 
-        let pendingLogData = {}; // Renamed to avoid confusion
+        let window_pendingLog = {}; // Fixed naming
 
         // Data Models
         let accounts = [];
@@ -70,6 +65,7 @@
         let fixedExpenses = [];
         let investments = []; 
         let dailyLogs = [];
+        // UPDATED: Added Age, TDEE logic updated
         let userProfile = { height: 172, weight: 69, age: 25, tdee: 2268, targetKcal: 1760, entRatio: 20 };
 
         // Defaults
@@ -92,7 +88,7 @@
             '其他': '📝', '電費': '⚡', '壽險': '🏥', '筆電': '💻', '機車': '🛵'
         };
 
-        // --- Init ---
+        // --- 初始化 ---
         document.addEventListener('DOMContentLoaded', () => {
             loadData();
             switchTab('dashboard');
@@ -103,8 +99,7 @@
             ACTIVE_MODEL = localStorage.getItem('gemini_model') || "gemini-1.5-flash";
             
             userProfile = DB.get('profile', userProfile);
-            // Migration: Ensure age exists
-            if(!userProfile.age) userProfile.age = 25;
+            if(!userProfile.age) userProfile.age = 25; // Migration
 
             const savedAcc = DB.get('accounts', null);
             accounts = savedAcc ? savedAcc : defaultAccountsList.map(name => ({name, balance: 0}));
@@ -141,12 +136,12 @@
             refreshUI();
         };
 
-        // --- Core Calc ---
+        // --- 核心計算 (UPDATED: Age & Deficit -500) ---
         const calculateTDEE = (w, h, age) => {
             // Mifflin-St Jeor (Male)
             const bmr = (10 * w) + (6.25 * h) - (5 * age) + 5;
-            const tdee = Math.round(bmr * 1.375); // Lightly active
-            return { tdee, target: tdee - 500 }; // Deficit -500
+            const tdee = Math.round(bmr * 1.375);
+            return { tdee, target: tdee - 500 }; // 減脂目標改為 -500
         };
 
         window.updateInvFromEnt = (val) => { let ent = parseInt(val) || 0; if (ent > 100) ent = 100; if (ent < 0) ent = 0; document.getElementById('ratio-inv').value = 100 - ent; };
@@ -192,29 +187,38 @@
             a.click();
         };
 
+        // NEW: Import Data Function (資料救援與匯入)
         window.importData = () => {
             const jsonStr = document.getElementById('import-json').value.trim();
             if (!jsonStr) return showToast("請貼上備份資料", "error");
+            
             try {
                 const data = JSON.parse(jsonStr);
+                
+                // 寬容處理
                 if (Array.isArray(data)) {
-                    if(confirm("⚠️ 偵測到純紀錄陣列。是否匯入並覆蓋現有紀錄？")) {
+                    if(confirm("⚠️ 系統偵測到這似乎是單純的『記帳紀錄陣列』。是否匯入並覆蓋？")) {
                         DB.set('logs', data);
                         alert("紀錄匯入成功！"); location.reload(); return;
                     }
-                    return;
+                    return; 
                 }
-                if (!data.accounts && !data.monthlyIncome) throw new Error("格式錯誤");
-                if (confirm("⚠️ 警告：這將覆蓋所有設定與紀錄！確定嗎？")) {
+
+                // 完整備份檔檢查
+                if (!data.accounts && !data.monthlyIncome) throw new Error("格式無法辨識");
+
+                if (confirm("⚠️ 警告：這將會覆蓋您目前『所有的』設定與紀錄！確定嗎？")) {
                     if(data.accounts) DB.set('accounts', data.accounts);
                     if(data.monthlyIncome) DB.set('income', data.monthlyIncome);
                     if(data.fixedExpenses) DB.set('fixed', data.fixedExpenses);
                     if(data.investments) DB.set('investments', data.investments);
                     if(data.dailyLogs) DB.set('logs', data.dailyLogs);
                     if(data.userProfile) DB.set('profile', data.userProfile);
-                    alert("還原成功！"); location.reload();
+                    alert("資料還原成功！"); location.reload();
                 }
-            } catch (e) { alert("匯入失敗：" + e.message); }
+            } catch (e) {
+                alert("匯入失敗：資料格式錯誤。\n" + e.message);
+            }
         };
         
         window.fetchGoogleModels = async () => {
@@ -268,6 +272,7 @@
             }
         };
 
+        // --- NEW: Image Compression (防當機) ---
         const compressImage = (file) => {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -292,7 +297,20 @@
             });
         };
 
-        // --- Log & Action ---
+        window.handleImageUpload = async (e) => {
+            const f = e.target.files[0];
+            if(f) { 
+                try {
+                    const compressedDataUrl = await compressImage(f);
+                    selectedImageBase64 = compressedDataUrl.split(',')[1]; 
+                    setHTML('image-preview', `<img src="${compressedDataUrl}" class="h-16 rounded object-cover shadow-sm">`); 
+                } catch(err) {
+                    showToast("圖片處理失敗", "error");
+                }
+            }
+        };
+
+        // --- Log & Action (UPDATED: Hybrid Mode) ---
         window.handleUnifiedLog = async () => {
             const description = document.getElementById('log-description').value;
             const amount = parseInt(document.getElementById('log-amount').value)||0;
@@ -324,13 +342,13 @@
                         btn.textContent = 'AI 分析中...';
                         const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                         if(res.error) throw new Error(res.error);
-                        pendingLogData = { description, amount, category, card, type: 'finance_health' };
+                        window.pendingLog = { description, amount, category, card, type: 'finance_health' };
                         setupVerifyModal('food', res);
                     }
                 } 
                 else if (category === '運動') {
                     // Hybrid Logic: If manual inputs exist, skip AI
-                    if (!isNaN(manualKcal)) { // Here manualKcal input serves as Burned Kcal in UI
+                    if (!isNaN(manualKcal)) { // Manual kcal input as Burned Kcal
                         commitLog({ description, amount: 0, category, card: '', type: 'exercise', burned: manualKcal });
                         showToast('紀錄成功 (手動輸入)', 'success');
                         resetLogForm();
@@ -338,7 +356,7 @@
                         btn.textContent = 'AI 分析中...';
                         const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。請只回傳JSON格式: {"burned": 數字}。`);
                         if(res.error) throw new Error(res.error);
-                        pendingLogData = { description, amount: 0, category, card: '', type: 'exercise' };
+                        window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' };
                         setupVerifyModal('exercise', res);
                     }
                 } 
@@ -349,9 +367,9 @@
                 }
             } catch(e) { 
                 showToast(`錯誤: ${e.message||'未知'}`, 'error');
-                // Fallback for AI fail
-                if(category === '食物' || category === '餐費') { pendingLogData = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
-                else if(category === '運動') { pendingLogData = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
+                // Fallback
+                if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
+                else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
                     showToast('記帳成功 (離線)', 'success');
@@ -375,11 +393,11 @@
         };
 
         window.confirmVerifyLog = async () => {
-            const mode = pendingLogData.type;
+            const mode = window.pendingLog.type;
             let extraData = {};
             if (mode === 'finance_health') { extraData.kcal = parseInt(document.getElementById('verify-kcal').value) || 0; extraData.protein = parseInt(document.getElementById('verify-protein').value) || 0; } 
             else if (mode === 'exercise') { extraData.burned = parseInt(document.getElementById('verify-burned').value) || 0; }
-            commitLog({ ...pendingLogData, ...extraData });
+            commitLog({ ...window.pendingLog, ...extraData });
             closeModal('verify');
             showToast('紀錄完成', 'success');
             resetLogForm();
@@ -396,15 +414,18 @@
             saveData();
         };
 
+        // NEW: Delete Log Function
         window.deleteLog = (id) => {
             if(!confirm("確定刪除此紀錄？\n(金額將自動退回帳戶)")) return;
             const logIdx = dailyLogs.findIndex(l => l.id === id);
             if(logIdx === -1) return;
             const log = dailyLogs[logIdx];
+
             if (log.amount > 0 && log.card) {
                 const accIdx = accounts.findIndex(a => a.name === log.card);
                 if(accIdx !== -1) accounts[accIdx].balance += log.amount;
             }
+
             dailyLogs.splice(logIdx, 1);
             saveData();
             showToast('紀錄已刪除並退款', 'success');
@@ -417,19 +438,6 @@
             document.getElementById('manual-prot-burn').value = '';
             setHTML('image-preview', '');
             selectedImageBase64 = null;
-        };
-
-        window.handleImageUpload = async (e) => {
-            const f = e.target.files[0];
-            if(f) { 
-                try {
-                    const compressedDataUrl = await compressImage(f);
-                    selectedImageBase64 = compressedDataUrl.split(',')[1]; 
-                    setHTML('image-preview', `<img src="${compressedDataUrl}" class="h-16 rounded object-cover shadow-sm">`); 
-                } catch(err) {
-                    showToast("圖片處理失敗", "error");
-                }
-            }
         };
 
         window.sendAIChat = async (contextType) => {
@@ -485,9 +493,9 @@
             const btn = document.getElementById('inv-add-btn'); btn.textContent = 'AI 分析中...'; btn.disabled = true;
             try {
                 const prompt = `分析投資: ${symbol}。觀點: "${note}"。風險評估。請簡短回覆。`;
-                const aiFeedback = await callAI(prompt); 
+                const aiFeedback = await callAI(prompt); 
                 const feedbackText = typeof aiFeedback === 'object' ? `錯誤: ${aiFeedback.error}` : aiFeedback;
-                investments.push({ id: Date.now().toString(), symbol, note, feedback: feedbackText, date: new Date().toLocaleDateString() }); 
+                investments.push({ id: Date.now().toString(), symbol, note, feedback: feedbackText, date: new Date().toLocaleDateString() }); 
                 saveData();
                 document.getElementById('inv-symbol').value = ''; document.getElementById('inv-note').value = '';
                 showToast('筆記已新增', 'success');
@@ -506,77 +514,100 @@
         // --- UI Utils ---
         window.openInputModal = (type, id=null) => {
             window.inputType = type; window.inputId = id;
+            
+            // Default View
             document.getElementById('input-default-container').classList.remove('hidden');
             document.getElementById('input-account-container').classList.add('hidden');
             document.getElementById('input-fixed-acc-container').classList.add('hidden');
+            
             setValue('input-value', ''); setValue('input-note', '');
             document.getElementById('input-modal').classList.remove('hidden');
             const title = document.getElementById('input-modal-title');
             const noteContainer = document.getElementById('input-note-container');
             const note = document.getElementById('input-note');
 
-            if(type === 'income') { title.textContent = '修改收入'; setValue('input-value', monthlyIncome[id]); noteContainer.classList.add('hidden'); } 
-            else if(type === 'fixed_add') { 
-                title.textContent = '新增固定支出'; 
-                noteContainer.classList.remove('hidden'); 
+            if(type === 'income') { title.textContent = '修改收入'; setValue('input-value', monthlyIncome[id]); noteContainer.classList.add('hidden'); } 
+            else if(type === 'fixed_add') { 
+                title.textContent = '新增固定支出'; 
+                noteContainer.classList.remove('hidden'); 
                 note.placeholder = '名稱';
+                
+                // Show Fixed Account Select
                 document.getElementById('input-fixed-acc-container').classList.remove('hidden');
                 const fixedAccSel = document.getElementById('input-fixed-acc-select');
                 fixedAccSel.innerHTML = accounts.map(a => `<option value="${a.name}">${a.name}</option>`).join('');
-            } 
-            else if (type === 'fixed_edit') { 
-                title.textContent = '修改固定支出'; 
+            } 
+            else if (type === 'fixed_edit') { 
+                title.textContent = '修改固定支出'; 
                 const item = fixedExpenses.find(f=>f.id===id);
-                setValue('input-value', item.amount); 
-                noteContainer.classList.add('hidden'); 
+                setValue('input-value', item.amount); 
+                noteContainer.classList.add('hidden'); 
+                
+                // Show Fixed Account Select & Set Value
                 document.getElementById('input-fixed-acc-container').classList.remove('hidden');
                 const fixedAccSel = document.getElementById('input-fixed-acc-select');
                 fixedAccSel.innerHTML = accounts.map(a => `<option value="${a.name}" ${item.note===a.name?'selected':''}>${a.name}</option>`).join('');
-            } 
+            } 
             else if(type === 'balance') { title.textContent = '資產校正'; if(id===-1) { noteContainer.classList.remove('hidden'); note.placeholder = '帳戶名稱'; } else { setValue('input-value', accounts[id].balance); noteContainer.classList.add('hidden'); } }
+            // NEW: Change Account Logic
             else if (type === 'change_account') {
                 title.textContent = '修改扣款帳戶';
                 document.getElementById('input-default-container').classList.add('hidden');
                 document.getElementById('input-account-container').classList.remove('hidden');
+                
                 const sel = document.getElementById('input-account-select');
                 sel.innerHTML = accounts.map(a => `<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('');
+                
+                // Set current selection
                 const currentLog = dailyLogs.find(l => l.id === id);
                 if(currentLog && currentLog.card) sel.value = currentLog.card;
             }
         };
 
         window.submitInputModal = async () => {
+            // Logic for Change Account
             if (window.inputType === 'change_account') {
                 const newCard = document.getElementById('input-account-select').value;
                 const logIdx = dailyLogs.findIndex(l => l.id === window.inputId);
+                
                 if (logIdx !== -1) {
                     const log = dailyLogs[logIdx];
                     const oldCard = log.card;
                     const amount = log.amount;
+
                     if (oldCard !== newCard) {
+                        // Revert old
                         const oldAccIdx = accounts.findIndex(a => a.name === oldCard);
                         if (oldAccIdx !== -1) accounts[oldAccIdx].balance += amount;
+
+                        // Deduct new
                         const newAccIdx = accounts.findIndex(a => a.name === newCard);
                         if (newAccIdx !== -1) accounts[newAccIdx].balance -= amount;
+
+                        // Update log
                         dailyLogs[logIdx].card = newCard;
                     }
                 }
             } else {
                 const v = parseInt(document.getElementById('input-value').value)||0;
                 const n = document.getElementById('input-note').value;
+                
                 if(window.inputType === 'income') { monthlyIncome[window.inputId] = v; }
-                if(window.inputType === 'fixed_add') { 
-                    if(!n) return; 
+                
+                if(window.inputType === 'fixed_add') { 
+                    if(!n) return; 
                     const acc = document.getElementById('input-fixed-acc-select').value;
-                    fixedExpenses.push({id:Date.now(), name:n, amount:v, note:acc}); 
+                    fixedExpenses.push({id:Date.now(), name:n, amount:v, note:acc}); 
                 }
-                if(window.inputType === 'fixed_edit') { 
-                    const idx = fixedExpenses.findIndex(f=>f.id===window.inputId); 
+                
+                if(window.inputType === 'fixed_edit') { 
+                    const idx = fixedExpenses.findIndex(f=>f.id===window.inputId); 
                     if(idx!==-1) {
                         fixedExpenses[idx].amount = v;
                         fixedExpenses[idx].note = document.getElementById('input-fixed-acc-select').value;
                     }
                 }
+                
                 if(window.inputType === 'balance') { if(window.inputId === -1) { if(!n) return; accounts.push({name:n, balance:v}); } else { accounts[window.inputId].balance = v; } }
             }
             saveData();
@@ -600,10 +631,13 @@
             const y = currentViewMonth.getFullYear();
             const m = currentViewMonth.getMonth();
             monthLabel.textContent = `${y}年 ${m+1}月`;
+
             const firstDay = new Date(y, m, 1).getDay();
             const daysInMonth = new Date(y, m + 1, 0).getDate();
+            
             let html = '';
             for(let i=0; i<firstDay; i++) html += `<div></div>`;
+            
             for(let d=1; d<=daysInMonth; d++) {
                 const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
                 const hasLog = dailyLogs.some(l => l.dateStr === dateStr);
@@ -622,6 +656,7 @@
             const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
             const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(currentDate.substring(0,7)));
 
+            // Dashboard Stats
             const kcalIn = todayLogs.reduce((a,b)=>a+(b.kcal||0),0);
             const kcalBurn = todayLogs.reduce((a,b)=>a+(b.burned||0),0);
             const todayTotalSpend = todayLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
@@ -633,10 +668,13 @@
             setText('dash-remain', userProfile.targetKcal + kcalBurn - kcalIn);
             setText('current-date-display', currentDate);
 
+            // Update Log Category Dropdown (Sync with Fixed Expenses)
             updateCategoryDropdown();
 
+            // Log List (with Icons & Edit/Delete Features)
             const logListHtml = todayLogs.length ? todayLogs.map(l=>{
                 const icon = categoryIcons[l.category] || '📝';
+                // Clickable Card Name for Editing
                 const cardDisplay = l.card ? `<span onclick="openInputModal('change_account', '${l.id}')" class="cursor-pointer text-blue-500 hover:text-blue-700 hover:underline decoration-dotted" title="點擊修改帳戶">${l.card}</span>` : '無';
                 
                 return `
@@ -660,10 +698,12 @@
             }).join('') : '<div class="text-center text-gray-400 py-4">本日無紀錄</div>';
             setHTML('log-list', logListHtml);
 
+            // Fixed List Rendering
             setHTML('dash-fixed-list', fixedExpenses.map(f => {
                 const spentThisMonth = monthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
                 const remaining = f.amount - spentThisMonth;
                 const isPaid = spentThisMonth > 0;
+                
                 return `
                 <div class="flex justify-between p-2 text-sm border-b items-center">
                     <div class="flex items-center gap-2">
@@ -680,6 +720,7 @@
                 </div>`;
             }).join(''));
 
+            // Report Logic & Budget Remaining
             const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
             const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
             const varTotal = monthLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
@@ -692,6 +733,7 @@
 
             const entRatio = userProfile.entRatio || 20;
             const invRatio = 100 - entRatio;
+            
             const entBudget = Math.floor(disposableIncome * (entRatio / 100));
             const invBudget = Math.floor(disposableIncome * (invRatio / 100));
 
@@ -700,11 +742,15 @@
             setText('rep-total-inc', `$${incomeTotal.toLocaleString()}`);
             setText('rep-disposable', `$${disposableIncome.toLocaleString()}`);
             setText('rep-final', `$${monthlyRemaining.toLocaleString()}`);
+            
             setText('rep-ent-val', `$${(entBudget - entSpent).toLocaleString()}`);
             setText('rep-ent-label', `娛樂 ${entRatio}% (預算$${entBudget})`);
+            
             setText('rep-inv-val', `$${(invBudget - invSpent).toLocaleString()}`);
             setText('rep-inv-label', `投資 ${invRatio}% (預算$${invBudget})`);
+
             setText('rep-total-fix', `-$${fixedTotal.toLocaleString()}`);
+            
             setHTML('rep-acc-list', accounts.map((a,i)=>`<div class="flex justify-between p-2 text-sm border-b"><span>${a.name}</span><div><span class="font-bold ${a.balance<0?'text-red-500':'text-blue-600'}">$${a.balance}</span> <button onclick="openInputModal('balance',${i})" class="text-gray-400 ml-2">✎</button></div></div>`).join(''));
             
             setHTML('inv-list', investments.map(i=>`
@@ -717,20 +763,69 @@
 
             setValue('prof-height', userProfile.height);
             setValue('prof-weight', userProfile.weight);
-            setValue('prof-age', userProfile.age);
+            setValue('prof-age', userProfile.age); // NEW
+            
             setValue('ratio-ent', userProfile.entRatio || 20);
             setValue('ratio-inv', 100 - (userProfile.entRatio || 20));
+            
             renderCalendar();
             
+            // Sync log category dropdown selection
             const currCat = document.getElementById('log-category').value;
             changeLogCategory(currCat);
         };
 
+        window.removeFixed = async (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); await saveData('fix'); };
+        window.switchTab = (t) => {
+            document.querySelectorAll('.tab-view').forEach(e=>e.classList.add('hidden'));
+            document.getElementById(`${t}-view`).classList.remove('hidden');
+            document.querySelectorAll('.nav-btn').forEach(e=>e.classList.remove('text-blue-600'));
+            document.getElementById(`nav-${t}`).classList.add('text-blue-600');
+            refreshUI();
+        };
+        window.changeDate = (e) => { currentDate = e.target.value; refreshUI(); };
+        window.showToast = (m,t) => { const el=document.getElementById('toast'); el.textContent=m; el.className=`fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white ${t==='error'?'bg-red-500':'bg-black'} z-50`; el.classList.remove('hidden'); setTimeout(()=>el.classList.add('hidden'),2000); };
+        
+        // NEW: Function to sync Fixed Expenses with Log Categories
+        const updateCategoryDropdown = () => {
+            const select = document.getElementById('log-category');
+            const currentVal = select.value;
+            
+            // Get names from fixed expenses ONLY (As requested: strictly follow fixed expenses)
+            // But we need to sort '食物' to the top if it exists
+            let fixedNames = fixedExpenses.map(f => f.name);
+            
+            // Remove '食物' from list first to re-insert at top
+            fixedNames = fixedNames.filter(n => n !== '食物');
+            
+            // Check if '食物' exists in fixedExpenses data, if so, put it first
+            const hasFood = fixedExpenses.some(f => f.name === '食物');
+            
+            let finalCats = [];
+            // Add '食物', then '娛樂', then '投資' (These are essential), then the rest of Fixed Expenses
+            if (hasFood) finalCats.push('食物');
+            finalCats.push('娛樂', '投資');
+            finalCats = [...finalCats, ...fixedNames];
+            
+            // Remove duplicates just in case user added '娛樂' or '投資' manually to fixed list
+            finalCats = [...new Set(finalCats)];
+
+            select.innerHTML = finalCats.map(c => {
+                const icon = categoryIcons[c] || '📝'; 
+                return `<option value="${c}">${icon} ${c}</option>`;
+            }).join('');
+            
+            // Restore selection if valid, otherwise default to first item
+            if(finalCats.includes(currentVal)) select.value = currentVal;
+            else if(finalCats.length > 0) select.value = finalCats[0];
+        };
+
         window.changeLogCategory = (v) => {
-            const cardSel = document.getElementById('log-card'); 
-            const amtInput = document.getElementById('log-amount'); 
+            const cardSel = document.getElementById('log-card'); 
+            const amtInput = document.getElementById('log-amount'); 
             const btn = document.getElementById('unified-log-btn');
             
+            // Manual Input Logic (NEW)
             const manualDiv = document.getElementById('manual-inputs');
             const manualKcal = document.getElementById('manual-kcal');
             const manualProtBurn = document.getElementById('manual-prot-burn');
@@ -748,52 +843,73 @@
                 manualDiv.classList.add('hidden');
             }
 
-            if (v === '運動') { 
-                cardSel.disabled = true; 
+            if (v === '運動') { 
+                cardSel.disabled = true; 
                 cardSel.innerHTML = '<option>無</option>';
-                amtInput.placeholder = '無'; 
-                amtInput.value = 0; 
-                amtInput.disabled = true; 
-                btn.textContent = '🔥 記錄'; 
-            } else { 
-                cardSel.disabled = false; 
-                amtInput.placeholder = '$'; 
-                amtInput.disabled = false; 
+                amtInput.placeholder = '無'; 
+                amtInput.value = 0; 
+                amtInput.disabled = true; 
+                btn.textContent = '🔥 記錄'; 
+            } else { 
+                cardSel.disabled = false; 
+                amtInput.placeholder = '$'; 
+                amtInput.disabled = false; 
                 btn.textContent = '💰 記錄';
                 
+                // Logic Start
                 let targetSelectAccount = '';
                 let budgetInfo = '';
                 const fixedItem = fixedExpenses.find(f => f.name === v);
 
+                // 1. Determine Target Account & Budget Info
+                // 1a. Check for Dynamic Budgets (Entertainment / Investment)
                 if (v === '娛樂' || v === '投資') {
+                    // Recalculate dynamic budget on the fly
                     const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
                     const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
                     const disposable = incomeTotal - fixedTotal;
                     const ratio = v === '娛樂' ? (userProfile.entRatio || 20) : (100 - (userProfile.entRatio || 20));
                     const totalBudget = Math.floor(disposable * (ratio / 100));
+                    
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
                     const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
                     const remaining = totalBudget - spent;
+                    
                     budgetInfo = ` (預算剩: $${remaining})`;
+                    // No forced account for dynamic budgets, user chooses freely
                 }
+                // 1b. Check for Fixed Expense Link
                 else if (fixedItem) {
+                    // Calculate Budget
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
                     const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
                     const remaining = fixedItem.amount - spent;
                     budgetInfo = ` (預算剩: $${remaining})`;
-                    targetSelectAccount = fixedItem.note; 
+
+                    // Determine Account Connection -> NOW RELIES ON FIXED ITEM NOTE (Payment Account)
+                    targetSelectAccount = fixedItem.note; 
                 }
 
+                // 2. Generate Options
                 const optionsHtml = accounts.map(a => {
-                    let label = `${a.name} ($${a.balance})`; 
-                    if (fixedItem && a.name === targetSelectAccount) { label = `✔ ${a.name}${budgetInfo}`; }
+                    let label = `${a.name} ($${a.balance})`; // Default: Asset Inventory Connection
+
+                    // If this is the Linked Account for the Fixed Expense -> Connect to Fixed Expense Data
+                    // FIX: Check against targetSelectAccount, not fixedItem.note
+                    if (fixedItem && a.name === targetSelectAccount) {
+                        label = `✔ ${a.name}${budgetInfo}`; 
+                    }
+
                     const isSelected = (a.name === targetSelectAccount);
                     return `<option value="${a.name}" ${isSelected ? 'selected' : ''}>${label}</option>`;
                 }).join('') + '<option value="custom">➕ 自訂...</option>';
 
                 cardSel.innerHTML = optionsHtml;
+                
+                // Hack: For Entertainment/Investment, since they don't lock an account, 
+                // we update the selected option's text AFTER generation if we want to show budget there
                 if (v === '娛樂' || v === '投資') {
                     Array.from(cardSel.options).forEach(opt => {
                         if (opt.value !== 'custom') {
@@ -804,233 +920,232 @@
             }
         };
 
-        // --- Remove the erroneous window.onload ---
-        // window.onload = initApp; // 移除此行，因為 initApp 未定義
+        // window.onload = initApp; // 移除這行導致當機的錯誤代碼
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
-    <div id="toast" class="hidden"></div>
+    <div id="toast" class="hidden"></div>
 
-    <div id="verify-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
-            <h3 id="verify-title" class="font-bold mb-4 text-lg">確認</h3>
-            <div id="verify-inputs"></div>
-            <div class="flex gap-2 mt-4"><button onclick="closeModal('verify')" class="flex-1 bg-gray-100 py-2 rounded font-bold text-gray-500">取消</button><button onclick="confirmVerifyLog()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold shadow-lg">確認存檔</button></div>
-        </div>
-    </div>
-    <div id="input-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
-            <h3 id="input-modal-title" class="font-bold mb-4 text-lg">輸入資料</h3>
-            
-            <div id="input-default-container" class="mb-3">
-                <div id="input-note-container"><input id="input-note" type="text" class="w-full border p-2 rounded mb-2" placeholder="名稱"></div>
-                <label id="input-label" class="text-xs text-gray-500">數值</label>
-                <input id="input-value" type="number" class="w-full border p-2 rounded font-bold text-lg">
-            </div>
+    <div id="verify-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
+            <h3 id="verify-title" class="font-bold mb-4 text-lg">確認</h3>
+            <div id="verify-inputs"></div>
+            <div class="flex gap-2 mt-4"><button onclick="closeModal('verify')" class="flex-1 bg-gray-100 py-2 rounded font-bold text-gray-500">取消</button><button onclick="confirmVerifyLog()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold shadow-lg">確認存檔</button></div>
+        </div>
+    </div>
+    <div id="input-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
+            <h3 id="input-modal-title" class="font-bold mb-4 text-lg">輸入資料</h3>
+            
+            <div id="input-default-container" class="mb-3">
+                <div id="input-note-container"><input id="input-note" type="text" class="w-full border p-2 rounded mb-2" placeholder="名稱"></div>
+                <label id="input-label" class="text-xs text-gray-500">數值</label>
+                <input id="input-value" type="number" class="w-full border p-2 rounded font-bold text-lg">
+            </div>
 
-            <div id="input-account-container" class="mb-3 hidden">
-                <label class="text-xs text-gray-500 block mb-2">選擇新扣款帳戶</label>
-                <select id="input-account-select" class="w-full border p-3 rounded font-bold bg-white"></select>
-            </div>
+            <div id="input-account-container" class="mb-3 hidden">
+                <label class="text-xs text-gray-500 block mb-2">選擇新扣款帳戶</label>
+                <select id="input-account-select" class="w-full border p-3 rounded font-bold bg-white"></select>
+            </div>
 
-            <div id="input-fixed-acc-container" class="mb-3 hidden">
-                <label class="text-xs text-gray-500 block mb-2">綁定扣款帳戶</label>
-                <select id="input-fixed-acc-select" class="w-full border p-3 rounded font-bold bg-white"></select>
-            </div>
+            <div id="input-fixed-acc-container" class="mb-3 hidden">
+                <label class="text-xs text-gray-500 block mb-2">綁定扣款帳戶</label>
+                <select id="input-fixed-acc-select" class="w-full border p-3 rounded font-bold bg-white"></select>
+            </div>
 
-            <div class="flex gap-2"><button onclick="closeModal('input')" class="flex-1 bg-gray-100 py-2 rounded">取消</button><button onclick="submitInputModal()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold">確定</button></div>
-        </div>
-    </div>
+            <div class="flex gap-2"><button onclick="closeModal('input')" class="flex-1 bg-gray-100 py-2 rounded">取消</button><button onclick="submitInputModal()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold">確定</button></div>
+        </div>
+    </div>
 
-    <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
-        <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V20.0 (Rescue)</span></div>
-            <div class="flex items-center gap-2">
-                <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
-                <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
-            </div>
-        </div>
-        <div id="calendar-wrapper" class="hidden mt-3 border-t pt-2">
-            <div class="flex justify-between items-center mb-2 px-2">
-                <button onclick="prevMonth()" class="text-gray-400 hover:text-black font-bold">◀</button>
-                <span id="current-month-label" class="text-sm font-bold w-20 text-center">...</span>
-                <button onclick="nextMonth()" class="text-gray-400 hover:text-black font-bold">▶</button>
-            </div>
-            <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 mb-1"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div>
-            <div id="calendar-grid" class="grid grid-cols-7 gap-1"></div>
-            <div class="text-center mt-2"><button onclick="jumpToToday()" class="text-xs text-blue-600 font-bold border border-blue-200 px-2 py-1 rounded">跳回今天</button></div>
-        </div>
-    </div>
+    <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
+        <div class="flex justify-between items-center">
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V21.0</span></div>
+            <div class="flex items-center gap-2">
+                <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
+                <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
+            </div>
+        </div>
+        <div id="calendar-wrapper" class="hidden mt-3 border-t pt-2">
+            <div class="flex justify-between items-center mb-2 px-2">
+                <button onclick="prevMonth()" class="text-gray-400 hover:text-black font-bold">◀</button>
+                <span id="current-month-label" class="text-sm font-bold w-20 text-center">...</span>
+                <button onclick="nextMonth()" class="text-gray-400 hover:text-black font-bold">▶</button>
+            </div>
+            <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 mb-1"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div>
+            <div id="calendar-grid" class="grid grid-cols-7 gap-1"></div>
+            <div class="text-center mt-2"><button onclick="jumpToToday()" class="text-xs text-blue-600 font-bold border border-blue-200 px-2 py-1 rounded">跳回今天</button></div>
+        </div>
+    </div>
 
-    <main class="max-w-md mx-auto p-3">
-        
-        <div id="dashboard-view" class="tab-view">
-            <div class="grid grid-cols-3 gap-2 mb-4">
-                <div class="bg-white p-2 rounded-xl border border-blue-100 text-center shadow-sm">
-                    <div class="text-[10px] text-gray-400">今日支出</div>
-                    <div id="dash-food" class="text-lg font-black text-blue-600">$0</div>
-                </div>
-                <div class="bg-white p-2 rounded-xl border border-yellow-100 text-center shadow-sm">
-                    <div class="text-[10px] text-gray-400">本月剩餘預算</div>
-                    <div id="dash-month-remain" class="text-lg font-black text-yellow-600">$0</div>
-                </div>
-                <div class="bg-gray-800 p-2 rounded-xl text-center text-white shadow-sm">
-                    <div class="text-[10px] opacity-70">剩餘熱量</div>
-                    <div id="dash-remain" class="text-lg font-black">1600</div>
-                </div>
-            </div>
+    <main class="max-w-md mx-auto p-3">
+        
+        <div id="dashboard-view" class="tab-view">
+            <div class="grid grid-cols-3 gap-2 mb-4">
+                <div class="bg-white p-2 rounded-xl border border-blue-100 text-center shadow-sm">
+                    <div class="text-[10px] text-gray-400">今日支出</div>
+                    <div id="dash-food" class="text-lg font-black text-blue-600">$0</div>
+                </div>
+                <div class="bg-white p-2 rounded-xl border border-yellow-100 text-center shadow-sm">
+                    <div class="text-[10px] text-gray-400">本月剩餘預算</div>
+                    <div id="dash-month-remain" class="text-lg font-black text-yellow-600">$0</div>
+                </div>
+                <div class="bg-gray-800 p-2 rounded-xl text-center text-white shadow-sm">
+                    <div class="text-[10px] opacity-70">剩餘熱量</div>
+                    <div id="dash-remain" class="text-lg font-black">1600</div>
+                </div>
+            </div>
 
-            <div class="bg-white p-4 rounded-xl shadow-md mb-4 border border-gray-200">
-                <div class="flex gap-2 mb-2">
-                    <select id="log-category" onchange="changeLogCategory(this.value)" class="bg-gray-50 border p-2 rounded text-sm w-1/3">
-                        </select>
-                    <select id="log-card" onchange="if(this.value==='custom') document.getElementById('finance-card-custom').classList.remove('hidden'); else document.getElementById('finance-card-custom').classList.add('hidden')" class="bg-gray-50 border p-2 rounded text-sm w-2/3"></select>
-                </div>
-                <input id="finance-card-custom" type="text" placeholder="輸入帳戶名稱" class="w-full border p-2 rounded text-sm mb-2 hidden">
-                <div class="flex items-center gap-2 mb-2">
-                     <label class="bg-gray-50 border border-gray-200 rounded-lg p-2 cursor-pointer flex items-center justify-center w-12 hover:bg-gray-100"><input type="file" accept="image/*" onchange="handleImageUpload(event)" class="hidden"><span class="text-xl">📷</span></label>
-                    <input id="log-description" placeholder="描述 (如: 雞腿便當)" class="flex-grow border border-gray-200 p-2 rounded text-sm h-10">
-                    <input id="log-amount" type="number" placeholder="$" class="w-16 border border-gray-200 p-2 rounded text-center font-bold text-sm h-10">
-                </div>
-                <div id="manual-inputs" class="flex gap-2 mb-2 hidden">
-                    <input id="manual-kcal" type="number" placeholder="熱量 (手動)" class="flex-1 border border-orange-200 bg-orange-50 p-2 rounded text-xs text-center font-bold text-orange-800">
-                    <input id="manual-prot-burn" type="number" placeholder="蛋白 (手動)" class="flex-1 border border-green-200 bg-green-50 p-2 rounded text-xs text-center font-bold text-green-800">
-                </div>
+            <div class="bg-white p-4 rounded-xl shadow-md mb-4 border border-gray-200">
+                <div class="flex gap-2 mb-2">
+                    <select id="log-category" onchange="changeLogCategory(this.value)" class="bg-gray-50 border p-2 rounded text-sm w-1/3">
+                        </select>
+                    <select id="log-card" onchange="if(this.value==='custom') document.getElementById('finance-card-custom').classList.remove('hidden'); else document.getElementById('finance-card-custom').classList.add('hidden')" class="bg-gray-50 border p-2 rounded text-sm w-2/3"></select>
+                </div>
+                <input id="finance-card-custom" type="text" placeholder="輸入帳戶名稱" class="w-full border p-2 rounded text-sm mb-2 hidden">
+                <div class="flex items-center gap-2 mb-2">
+                     <label class="bg-gray-50 border border-gray-200 rounded-lg p-2 cursor-pointer flex items-center justify-center w-12 hover:bg-gray-100"><input type="file" accept="image/*" onchange="handleImageUpload(event)" class="hidden"><span class="text-xl">📷</span></label>
+                    <input id="log-description" placeholder="描述 (如: 雞腿便當)" class="flex-grow border border-gray-200 p-2 rounded text-sm h-10">
+                    <input id="log-amount" type="number" placeholder="$" class="w-16 border border-gray-200 p-2 rounded text-center font-bold text-sm h-10">
+                </div>
+                                <div id="manual-inputs" class="flex gap-2 mb-2 hidden">
+                    <input id="manual-kcal" type="number" placeholder="熱量 (手動)" class="flex-1 border border-orange-200 bg-orange-50 p-2 rounded text-xs text-center font-bold text-orange-800">
+                    <input id="manual-prot-burn" type="number" placeholder="蛋白 (手動)" class="flex-1 border border-green-200 bg-green-50 p-2 rounded text-xs text-center font-bold text-green-800">
+                </div>
 
-                <div id="image-preview" class="mb-2 flex justify-start"></div>
-                <button id="unified-log-btn" onclick="handleUnifiedLog()" class="w-full bg-gray-800 text-white py-3 rounded-lg font-bold shadow-lg">💰 記錄</button>
-            </div>
+                <div id="image-preview" class="mb-2 flex justify-start"></div>
+                <button id="unified-log-btn" onclick="handleUnifiedLog()" class="w-full bg-gray-800 text-white py-3 rounded-lg font-bold shadow-lg">💰 記錄</button>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm border border-green-200 p-4 mb-4">
-                <h3 class="font-bold text-green-700 text-sm mb-3 flex items-center border-b border-green-100 pb-2"><span class="text-lg mr-2">🥗</span> AI 營養教練</h3>
-                <div id="health-chat-box" class="h-40 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">有什麼飲食問題想問我嗎？</div></div>
-                <div class="flex gap-2"><input id="health-chat-input" type="text" placeholder="問教練..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('health')" class="bg-green-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
-            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-green-200 p-4 mb-4">
+                <h3 class="font-bold text-green-700 text-sm mb-3 flex items-center border-b border-green-100 pb-2"><span class="text-lg mr-2">🥗</span> AI 營養教練</h3>
+                <div id="health-chat-box" class="h-40 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">有什麼飲食問題想問我嗎？</div></div>
+                <div class="flex gap-2"><input id="health-chat-input" type="text" placeholder="問教練..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('health')" class="bg-green-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm p-3 mb-4">
-                <div class="flex justify-between items-center mb-2">
-                    <h3 class="text-xs font-bold text-gray-400">今日紀錄</h3>
-                    <span id="today-record-sum" class="text-xs font-bold text-blue-600"></span>
-                </div>
-                <div id="log-list"></div>
-            </div>
+            <div class="bg-white rounded-xl shadow-sm p-3 mb-4">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold text-gray-400">今日紀錄</h3>
+                    <span id="today-record-sum" class="text-xs font-bold text-blue-600"></span>
+                </div>
+                <div id="log-list"></div>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm p-4 border border-red-100">
-                <div class="flex justify-between items-center mb-2 border-b pb-2"><h3 class="font-bold text-red-800 text-sm">🔒 每月固定支出</h3><button onclick="openInputModal('fixed_add')" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">＋ 新增</button></div>
-                <div id="dash-fixed-list"></div>
-            </div>
-        </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 border border-red-100">
+                <div class="flex justify-between items-center mb-2 border-b pb-2"><h3 class="font-bold text-red-800 text-sm">🔒 每月固定支出</h3><button onclick="openInputModal('fixed_add')" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">＋ 新增</button></div>
+                <div id="dash-fixed-list"></div>
+            </div>
+        </div>
 
-        <div id="finance-view" class="tab-view hidden">
-            <div class="bg-white rounded-xl shadow-lg border border-gray-200 p-4 mb-4 text-center">
-                <div class="text-sm text-gray-500">可支配所得 (收入-固定)</div>
-                <div id="rep-disposable" class="text-2xl font-black text-blue-600 mb-2">$0</div>
-                <div class="flex gap-2 text-xs mb-3">
-                    <div class="flex-1 bg-yellow-50 p-1 rounded text-yellow-700"><span id="rep-ent-label">娛樂剩餘</span> <span id="rep-ent-val" class="font-bold block text-lg">$0</span></div>
-                    <div class="flex-1 bg-green-50 p-1 rounded text-green-700"><span id="rep-inv-label">投資剩餘</span> <span id="rep-inv-val" class="font-bold block text-lg">$0</span></div>
-                </div>
-                <div class="bg-gray-900 text-white p-3 rounded-lg"><div class="text-xs opacity-70">最終餘額 (可支配 - 變動支出)</div><div class="text-lg font-bold"> <span id="rep-final" class="text-xl">$0</span></div></div>
-            </div>
+        <div id="finance-view" class="tab-view hidden">
+            <div class="bg-white rounded-xl shadow-lg border border-gray-200 p-4 mb-4 text-center">
+                <div class="text-sm text-gray-500">可支配所得 (收入-固定)</div>
+                <div id="rep-disposable" class="text-2xl font-black text-blue-600 mb-2">$0</div>
+                <div class="flex gap-2 text-xs mb-3">
+                    <div class="flex-1 bg-yellow-50 p-1 rounded text-yellow-700"><span id="rep-ent-label">娛樂剩餘</span> <span id="rep-ent-val" class="font-bold block text-lg">$0</span></div>
+                    <div class="flex-1 bg-green-50 p-1 rounded text-green-700"><span id="rep-inv-label">投資剩餘</span> <span id="rep-inv-val" class="font-bold block text-lg">$0</span></div>
+                </div>
+                <div class="bg-gray-900 text-white p-3 rounded-lg"><div class="text-xs opacity-70">最終餘額 (可支配 - 變動支出)</div><div class="text-lg font-bold"> <span id="rep-final" class="text-xl">$0</span></div></div>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
-                <h3 class="font-bold border-b pb-2 mb-2">收入</h3>
-                <div class="grid grid-cols-2 gap-4 text-sm mb-2">
-                    <div><span class="text-xs text-gray-400">薪水</span> <input id="inc-salary" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','salary')" readonly></div>
-                    <div><span class="text-xs text-gray-400">獎金</span> <input id="inc-bonus" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','bonus')" readonly></div>
-                    <div><span class="text-xs text-gray-400">加班</span> <input id="inc-overtime" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','overtime')" readonly></div>
-                    <div><span class="text-xs text-gray-400">OnCall</span> <input id="inc-oncall" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','oncall')" readonly></div>
-                </div>
-                <div class="flex justify-between font-bold text-green-600 bg-green-50 p-2 rounded"><span>總計</span><span id="rep-total-inc">$0</span></div>
-            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+                <h3 class="font-bold border-b pb-2 mb-2">收入</h3>
+                <div class="grid grid-cols-2 gap-4 text-sm mb-2">
+                    <div><span class="text-xs text-gray-400">薪水</span> <input id="inc-salary" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','salary')" readonly></div>
+                    <div><span class="text-xs text-gray-400">獎金</span> <input id="inc-bonus" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','bonus')" readonly></div>
+                    <div><span class="text-xs text-gray-400">加班</span> <input id="inc-overtime" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','overtime')" readonly></div>
+                    <div><span class="text-xs text-gray-400">OnCall</span> <input id="inc-oncall" type="number" class="w-full border-b font-bold" onclick="openInputModal('income','oncall')" readonly></div>
+                </div>
+                <div class="flex justify-between font-bold text-green-600 bg-green-50 p-2 rounded"><span>總計</span><span id="rep-total-inc">$0</span></div>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-blue-100">
-                <div class="flex justify-between border-b pb-2 mb-2"><h3 class="font-bold text-blue-800 text-sm">🏦 資產庫存</h3><button onclick="openInputModal('balance', -1)" class="text-xs text-blue-600">＋ 帳戶</button></div>
-                <div id="rep-acc-list"></div>
-            </div>
-        </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-blue-100">
+                <div class="flex justify-between border-b pb-2 mb-2"><h3 class="font-bold text-blue-800 text-sm">🏦 資產庫存</h3><button onclick="openInputModal('balance', -1)" class="text-xs text-blue-600">＋ 帳戶</button></div>
+                <div id="rep-acc-list"></div>
+            </div>
+        </div>
 
-        <div id="investment-view" class="tab-view hidden">
-            <div class="bg-white rounded-xl shadow-sm border border-indigo-200 p-4 mb-4">
-                <h3 class="font-bold text-indigo-700 text-sm mb-3 flex items-center border-b border-indigo-100 pb-2"><span class="text-lg mr-2">📈</span> 投資顧問 (全知模式)</h3>
-                <div id="finance-chat-box" class="h-64 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">我可以分析您的持股狀況...</div></div>
-                <div class="flex gap-2"><input id="finance-chat-input" type="text" placeholder="問顧問: 我還能投資嗎..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('finance')" class="bg-indigo-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
-            </div>
-            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-gray-200">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">我的投資筆記</h3>
-                <div class="bg-gray-50 p-3 rounded-xl mb-3">
-                    <div class="flex gap-2 mb-2"><input id="inv-symbol" type="text" placeholder="代號 (如: 2330)" class="w-1/3 p-2 rounded border border-gray-200 text-sm"><input id="inv-note" type="text" placeholder="觀點 (如: 看好AI)" class="w-2/3 p-2 rounded border border-gray-200 text-sm"></div>
-                    <button id="inv-add-btn" onclick="addInvestment()" class="w-full bg-gray-800 text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700">＋ 新增並 AI 分析</button>
-                </div>
-                <div id="inv-list"></div>
-            </div>
-        </div>
+        <div id="investment-view" class="tab-view hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-indigo-200 p-4 mb-4">
+                <h3 class="font-bold text-indigo-700 text-sm mb-3 flex items-center border-b border-indigo-100 pb-2"><span class="text-lg mr-2">📈</span> 投資顧問 (全知模式)</h3>
+                <div id="finance-chat-box" class="h-64 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">我可以分析您的持股狀況...</div></div>
+                <div class="flex gap-2"><input id="finance-chat-input" type="text" placeholder="問顧問: 我還能投資嗎..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm outline-none"><button onclick="sendAIChat('finance')" class="bg-indigo-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-gray-200">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">我的投資筆記</h3>
+                <div class="bg-gray-50 p-3 rounded-xl mb-3">
+                    <div class="flex gap-2 mb-2"><input id="inv-symbol" type="text" placeholder="代號 (如: 2330)" class="w-1/3 p-2 rounded border border-gray-200 text-sm"><input id="inv-note" type="text" placeholder="觀點 (如: 看好AI)" class="w-2/3 p-2 rounded border border-gray-200 text-sm"></div>
+                    <button id="inv-add-btn" onclick="addInvestment()" class="w-full bg-gray-800 text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700">＋ 新增並 AI 分析</button>
+                </div>
+                <div id="inv-list"></div>
+            </div>
+        </div>
 
-        <div id="settings-view" class="tab-view hidden">
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">👤 體態設定</h3>
-                <div class="mb-3">
+        <div id="settings-view" class="tab-view hidden">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">👤 體態設定</h3>
+                <div class="mb-3">
                     <label class="text-xs text-gray-500">身高 (cm)</label><input id="prof-height" type="number" class="w-full border p-2 rounded mb-2">
                     <label class="text-xs text-gray-500">體重 (kg)</label><input id="prof-weight" type="number" class="w-full border p-2 rounded mb-2">
                     <label class="text-xs text-gray-500">年齡 (歲)</label><input id="prof-age" type="number" class="w-full border p-2 rounded">
                 </div>
-            </div>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">⚖️ 理財分配設定</h3>
-                <div class="flex items-center gap-4 mb-3">
-                    <div class="flex-1">
-                        <label class="text-xs text-yellow-600 block mb-1">娛樂佔比 (%)</label>
-                        <input id="ratio-ent" type="number" oninput="updateInvFromEnt(this.value)" class="w-full border p-2 rounded font-bold text-center text-yellow-700">
-                    </div>
-                    <div class="flex-1">
-                        <label class="text-xs text-green-600 block mb-1">投資佔比 (%)</label>
-                        <input id="ratio-inv" type="number" oninput="updateEntFromInv(this.value)" class="w-full border p-2 rounded font-bold text-center text-green-700">
-                    </div>
-                </div>
-                <button onclick="updateSettings()" class="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-sm">儲存設定 (體態與比例)</button>
-            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">⚖️ 理財分配設定</h3>
+                <div class="flex items-center gap-4 mb-3">
+                    <div class="flex-1">
+                        <label class="text-xs text-yellow-600 block mb-1">娛樂佔比 (%)</label>
+                        <input id="ratio-ent" type="number" oninput="updateInvFromEnt(this.value)" class="w-full border p-2 rounded font-bold text-center text-yellow-700">
+                    </div>
+                    <div class="flex-1">
+                        <label class="text-xs text-green-600 block mb-1">投資佔比 (%)</label>
+                        <input id="ratio-inv" type="number" oninput="updateEntFromInv(this.value)" class="w-full border p-2 rounded font-bold text-center text-green-700">
+                    </div>
+                </div>
+                <button onclick="updateSettings()" class="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-sm">儲存設定 (體態與比例)</button>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">🤖 AI 模型設定</h3>
-                <div class="mb-3">
-                    <label class="text-xs text-gray-500">Gemini Model</label>
-                    <div class="flex gap-2 mb-2">
-                        <select id="setting-model" onchange="handleModelChange(this.value)" class="flex-grow border p-2 rounded bg-white text-sm">
-                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (New!)</option>
-                            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-                            <option value="custom">自訂 Model ID</option>
-                        </select>
-                        <button onclick="fetchGoogleModels()" class="bg-gray-100 px-3 rounded border border-gray-300 text-lg hover:bg-gray-200">🔄</button>
-                    </div>
-                    <input id="setting-model-custom" type="text" placeholder="輸入 Model ID" class="w-full border p-2 rounded bg-gray-50 text-sm mb-2 hidden">
-                    
-                    <label class="text-xs text-gray-500">Gemini API Key</label>
-                    <input id="setting-api-key" type="password" placeholder="貼上您的 API Key" class="w-full border p-2 rounded bg-gray-50 text-sm">
-                </div>
-                <button onclick="saveSystemConfig()" class="w-full bg-gray-800 text-white py-2 rounded-lg font-bold text-sm">儲存 Key 與模型</button>
-            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">🤖 AI 模型設定</h3>
+                <div class="mb-3">
+                    <label class="text-xs text-gray-500">Gemini Model</label>
+                    <div class="flex gap-2 mb-2">
+                        <select id="setting-model" onchange="handleModelChange(this.value)" class="flex-grow border p-2 rounded bg-white text-sm">
+                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (New!)</option>
+                            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                            <option value="custom">自訂 Model ID</option>
+                        </select>
+                        <button onclick="fetchGoogleModels()" class="bg-gray-100 px-3 rounded border border-gray-300 text-lg hover:bg-gray-200">🔄</button>
+                    </div>
+                    <input id="setting-model-custom" type="text" placeholder="輸入 Model ID" class="w-full border p-2 rounded bg-gray-50 text-sm mb-2 hidden">
+                    
+                    <label class="text-xs text-gray-500">Gemini API Key</label>
+                    <input id="setting-api-key" type="password" placeholder="貼上您的 API Key" class="w-full border p-2 rounded bg-gray-50 text-sm">
+                </div>
+                <button onclick="saveSystemConfig()" class="w-full bg-gray-800 text-white py-2 rounded-lg font-bold text-sm">儲存 Key 與模型</button>
+            </div>
 
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">📦 資料備份</h3>
-                <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
-                
-                <div class="mt-4 border-t pt-4">
-                    <label class="text-xs text-gray-500 block mb-2">📥 資料救援與匯入</label>
-                    <textarea id="import-json" class="w-full border p-2 rounded text-xs h-32 mb-2" placeholder="在此貼上備份文字..."></textarea>
-                    <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">確認匯入</button>
-                </div>
-            </div>
-            
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v20.0<br>(Rescue Edition)</div>
-        </div>
-    </main>
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">📦 資料備份</h3>
+                <button onclick="exportData()" class="w-full bg-gray-100 text-gray-600 py-2 rounded-lg font-bold text-sm hover:bg-gray-200">匯出資料 (JSON)</button>
+                
+                <div class="mt-4 border-t pt-4">
+                    <label class="text-xs text-gray-500 block mb-2">📥 資料救援與匯入</label>
+                    <textarea id="import-json" class="w-full border p-2 rounded text-xs h-32 mb-2" placeholder="在此貼上備份文字..."></textarea>
+                    <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">確認匯入</button>
+                </div>
+            </div>
+            
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach V21.0<br>(Based on V17 Fix)</div>
+        </div>
+    </main>
 
-    <div class="fixed bottom-0 w-full bg-white border-t flex justify-around py-3 z-30 pb-6 safe-area-pb">
-        <button id="nav-dashboard" onclick="switchTab('dashboard')" class="nav-btn text-blue-600 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">🏠</span>駕駛艙</button>
-        <button id="nav-finance" onclick="switchTab('finance')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">📊</span>報表</button>
-        <button id="nav-investment" onclick="switchTab('investment')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">📈</span>投資</button>
-        <button id="nav-settings" onclick="switchTab('settings')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">⚙️</span>設定</button>
-    </div>
+    <div class="fixed bottom-0 w-full bg-white border-t flex justify-around py-3 z-30 pb-6 safe-area-pb">
+        <button id="nav-dashboard" onclick="switchTab('dashboard')" class="nav-btn text-blue-600 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">🏠</span>駕駛艙</button>
+        <button id="nav-finance" onclick="switchTab('finance')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">📊</span>報表</button>
+        <button id="nav-investment" onclick="switchTab('investment')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">📈</span>投資</button>
+        <button id="nav-settings" onclick="switchTab('settings')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4"><span class="text-xl">⚙️</span>設定</button>
+    </div>
 </body>
 </html>
