@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach</title>
+    <title>Pocket Coach v18</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -23,6 +23,8 @@
         .ai-content li { margin-bottom: 0.2em; }
         .ai-content p { margin-bottom: 0.5em; }
         .safe-area-pb { padding-bottom: env(safe-area-inset-bottom); }
+        /* 隱藏原生檔案輸入框 */
+        .hidden-input { display: none; }
     </style>
     <script>
         // --- UI Helpers ---
@@ -33,15 +35,11 @@
         // --- 本地資料庫 (Local Storage Wrapper) ---
         const DB = {
             get: (key, defaultVal) => {
-                try {
-                    const data = localStorage.getItem(`pocket_coach_${key}`);
-                    return data ? JSON.parse(data) : defaultVal;
-                } catch(e) { console.error(e); return defaultVal; }
+                const data = localStorage.getItem(`pocket_coach_${key}`);
+                return data ? JSON.parse(data) : defaultVal;
             },
             set: (key, val) => {
-                try {
-                    localStorage.setItem(`pocket_coach_${key}`, JSON.stringify(val));
-                } catch(e) { console.error("Save failed", e); }
+                localStorage.setItem(`pocket_coach_${key}`, JSON.stringify(val));
             }
         };
 
@@ -65,8 +63,8 @@
         let fixedExpenses = [];
         let investments = []; 
         let dailyLogs = [];
-        // UPDATED: Added Age, TDEE logic updated
-        let userProfile = { height: 172, weight: 69, age: 25, tdee: 2268, targetKcal: 1760, entRatio: 20 };
+        // NEW: 加入 age, gender 預設值
+        let userProfile = { height: 172, weight: 69, age: 30, gender: 'male', tdee: 2000, targetKcal: 1500, entRatio: 20 };
 
         // Defaults
         const defaultAccountsList = ['國泰', '郵局', 'BANK', '合庫', '玉山', '聯邦'];
@@ -99,8 +97,9 @@
             ACTIVE_MODEL = localStorage.getItem('gemini_model') || "gemini-1.5-flash";
             
             userProfile = DB.get('profile', userProfile);
-            // Migration for age
-            if(!userProfile.age) userProfile.age = 25;
+            // 確保新欄位有預設值 (舊資料遷移)
+            if(!userProfile.age) userProfile.age = 30;
+            if(!userProfile.gender) userProfile.gender = 'male';
 
             const savedAcc = DB.get('accounts', null);
             accounts = savedAcc ? savedAcc : defaultAccountsList.map(name => ({name, balance: 0}));
@@ -137,11 +136,14 @@
             refreshUI();
         };
 
-        // --- 核心計算 (UPDATED: Age & Deficit -500) ---
-        const calculateTDEE = (w, h, age) => {
-            // Mifflin-St Jeor (Male)
-            const bmr = (10 * w) + (6.25 * h) - (5 * age) + 5;
-            const tdee = Math.round(bmr * 1.375);
+        // --- 核心計算 (Updated for Age & Gender) ---
+        // Mifflin-St Jeor 公式
+        const calculateTDEE = (w, h, age, gender) => {
+            // s = +5 for male, -161 for female
+            const s = gender === 'male' ? 5 : -161;
+            const bmr = (10 * w) + (6.25 * h) - (5 * age) + s;
+            const tdee = Math.round(bmr * 1.375); // 輕度活動
+            // NEW: TDEE - 500
             return { tdee, target: tdee - 500 };
         };
 
@@ -151,12 +153,14 @@
         window.updateSettings = () => {
             const h = parseInt(document.getElementById('prof-height').value)||172;
             const w = parseInt(document.getElementById('prof-weight').value)||69;
-            const age = parseInt(document.getElementById('prof-age').value)||25;
+            const age = parseInt(document.getElementById('prof-age').value)||30;
+            const gender = document.getElementById('prof-gender').value;
             const entR = parseInt(document.getElementById('ratio-ent').value)||20;
-            const res = calculateTDEE(w, h, age);
-            userProfile = { ...userProfile, height: h, weight: w, age: age, tdee: res.tdee, targetKcal: res.target, entRatio: entR };
+            
+            const res = calculateTDEE(w, h, age, gender);
+            userProfile = { ...userProfile, height: h, weight: w, age: age, gender: gender, tdee: res.tdee, targetKcal: res.target, entRatio: entR };
             saveData();
-            showToast('設定已更新', 'success');
+            showToast('設定已更新 (TDEE已重算)', 'success');
         };
 
         window.saveSystemConfig = () => {
@@ -188,7 +192,6 @@
             a.click();
         };
 
-        // NEW: Import Data Function (資料救援與匯入)
         window.importData = () => {
             const jsonStr = document.getElementById('import-json').value.trim();
             if (!jsonStr) return showToast("請貼上備份資料", "error");
@@ -196,18 +199,16 @@
             try {
                 const data = JSON.parse(jsonStr);
                 
-                // 寬容處理：如果使用者只貼了紀錄陣列 (如: [{"id":1...])
                 if (Array.isArray(data)) {
-                    if(confirm("⚠️ 系統偵測到這似乎是單純的『記帳紀錄陣列 (Array)』。\n\n是否將其作為『記帳紀錄』匯入並覆蓋現有紀錄？")) {
+                    if(confirm("⚠️ 系統偵測到這似乎是單純的『記帳紀錄陣列』。\n\n是否將其作為『記帳紀錄』匯入並覆蓋現有紀錄？")) {
                         DB.set('logs', data);
                         alert("紀錄匯入成功！頁面將自動重新整理。");
                         location.reload();
                         return;
                     }
-                    return; // 使用者取消
+                    return;
                 }
 
-                // 完整備份檔檢查
                 if (!data.accounts && !data.monthlyIncome && !data.fixedExpenses && !data.dailyLogs) {
                     throw new Error("格式無法辨識 (找不到 accounts, dailyLogs 等關鍵欄位)");
                 }
@@ -279,54 +280,16 @@
             }
         };
 
-        // --- NEW: Image Compression (防當機) ---
-        const compressImage = (file) => {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = (event) => {
-                    const img = new Image();
-                    img.src = event.target.result;
-                    img.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        const MAX_WIDTH = 800; 
-                        let width = img.width;
-                        let height = img.height;
-                        if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-                        canvas.width = width; canvas.height = height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, width, height);
-                        resolve(canvas.toDataURL('image/jpeg', 0.7));
-                    }
-                    img.onerror = (e) => reject(e);
-                }
-                reader.onerror = (e) => reject(e);
-            });
-        };
-
-        window.handleImageUpload = async (e) => {
-            const f = e.target.files[0];
-            if(f) { 
-                try {
-                    const compressedDataUrl = await compressImage(f);
-                    selectedImageBase64 = compressedDataUrl.split(',')[1]; 
-                    setHTML('image-preview', `<img src="${compressedDataUrl}" class="h-16 rounded object-cover shadow-sm">`); 
-                } catch(err) {
-                    showToast("圖片處理失敗", "error");
-                }
-            }
-        };
-
-        // --- Log & Action (UPDATED: Hybrid Mode) ---
+        // --- Log & Action ---
         window.handleUnifiedLog = async () => {
             const description = document.getElementById('log-description').value;
             const amount = parseInt(document.getElementById('log-amount').value)||0;
             const category = document.getElementById('log-category').value;
             let card = document.getElementById('log-card').value;
-            
-            // Manual Inputs
-            const manualKcal = parseInt(document.getElementById('manual-kcal').value);
-            const manualProtBurn = parseInt(document.getElementById('manual-prot-burn').value);
+
+            // NEW: 取得手動輸入的值
+            const manualKcal = document.getElementById('log-manual-kcal').value;
+            const manualProtein = document.getElementById('log-manual-protein').value;
             
             if(card==='custom') {
                 card = document.getElementById('finance-card-custom').value;
@@ -335,18 +298,21 @@
 
             if(!description) return showToast('請輸入描述', 'error');
             const btn = document.getElementById('unified-log-btn');
-            btn.disabled = true; 
+            btn.disabled = true; btn.textContent = 'AI 運算中...';
 
             try {
                 if(category === '食物' || category === '餐費') {
-                    // Hybrid Logic: If manual inputs exist, skip AI
-                    if (!isNaN(manualKcal)) {
-                        const protein = isNaN(manualProtBurn) ? 0 : manualProtBurn;
-                        commitLog({ description, amount, category, card, type: 'finance_health', kcal: manualKcal, protein: protein });
-                        showToast('紀錄成功 (手動輸入)', 'success');
-                        resetLogForm();
+                    // NEW: 如果有手動輸入，直接使用，不呼叫 AI 分析營養
+                    if (manualKcal || manualProtein) {
+                         const manualData = {
+                             kcal: parseInt(manualKcal) || 0,
+                             protein: parseInt(manualProtein) || 0
+                         };
+                         commitLog({ description, amount, category, card, type: 'finance_health', ...manualData });
+                         showToast('記帳成功 (手動營養)', 'success');
+                         resetLogForm();
                     } else {
-                        btn.textContent = 'AI 分析中...';
+                        // 原本的 AI 流程
                         const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                         if(res.error) throw new Error(res.error);
                         window.pendingLog = { description, amount, category, card, type: 'finance_health' };
@@ -354,18 +320,10 @@
                     }
                 } 
                 else if (category === '運動') {
-                    // Hybrid Logic: If manual inputs exist, skip AI
-                    if (!isNaN(manualKcal)) { // Manual kcal input as Burned Kcal
-                        commitLog({ description, amount: 0, category, card: '', type: 'exercise', burned: manualKcal });
-                        showToast('紀錄成功 (手動輸入)', 'success');
-                        resetLogForm();
-                    } else {
-                        btn.textContent = 'AI 分析中...';
-                        const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。請只回傳JSON格式: {"burned": 數字}。`);
-                        if(res.error) throw new Error(res.error);
-                        window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' };
-                        setupVerifyModal('exercise', res);
-                    }
+                    const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。請只回傳JSON格式: {"burned": 數字}。`);
+                    if(res.error) throw new Error(res.error);
+                    window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' };
+                    setupVerifyModal('exercise', res);
                 } 
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
@@ -373,8 +331,7 @@
                     resetLogForm();
                 }
             } catch(e) { 
-                showToast(`錯誤: ${e.message||'未知'}`, 'error');
-                // Fallback for AI fail
+                showToast(`AI 錯誤: ${e.message||'未知'}`, 'error');
                 if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
                 else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else {
@@ -411,7 +368,6 @@
         };
 
         const commitLog = (d) => {
-            // FIX: 使用當前選定的日期 (currentDate) 而不是當下時間 (getLocalDate())
             const logDateStr = currentDate; 
             const logData = { id: Date.now().toString(), timestamp: new Date().toISOString(), dateStr: logDateStr, description: d.description, amount: d.amount, category: d.category, card: d.card, type: d.type, kcal: d.kcal || 0, protein: d.protein || 0, burned: d.burned || 0 };
             dailyLogs.unshift(logData);
@@ -419,18 +375,15 @@
                 const idx = accounts.findIndex(a=>a.name===d.card);
                 if(idx!==-1) accounts[idx].balance -= d.amount;
             }
-            // 移除強制更新 currentDate 的邏輯，保持在使用者選定的那一天
             saveData();
         };
 
-        // NEW: Delete Log Function
         window.deleteLog = (id) => {
             if(!confirm("確定刪除此紀錄？\n(金額將自動退回帳戶)")) return;
             const logIdx = dailyLogs.findIndex(l => l.id === id);
             if(logIdx === -1) return;
             const log = dailyLogs[logIdx];
 
-            // Revert balance if money was spent
             if (log.amount > 0 && log.card) {
                 const accIdx = accounts.findIndex(a => a.name === log.card);
                 if(accIdx !== -1) accounts[accIdx].balance += log.amount;
@@ -444,11 +397,91 @@
         const resetLogForm = () => {
             document.getElementById('log-description').value = '';
             document.getElementById('log-amount').value = '';
-            document.getElementById('manual-kcal').value = '';
-            document.getElementById('manual-prot-burn').value = '';
+            // 清空手動輸入
+            document.getElementById('log-manual-kcal').value = '';
+            document.getElementById('log-manual-protein').value = '';
+            toggleManualInput(false); // 收起手動區塊
+
             setHTML('image-preview', '');
             selectedImageBase64 = null;
         };
+
+        // NEW: 壓縮圖片功能 (防當機)
+        const compressImage = (file) => {
+            return new Promise((resolve, reject) => {
+                const maxWidth = 1024; // 限制最大寬度
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        // 計算縮放比例
+                        if (width > maxWidth) {
+                            height *= maxWidth / width;
+                            width = maxWidth;
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // 輸出壓縮後的 Base64 (image/jpeg, quality 0.7)
+                        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                        resolve(compressedDataUrl);
+                    };
+                    img.onerror = (err) => reject(err);
+                };
+                reader.onerror = (err) => reject(err);
+            });
+        };
+
+        window.handleImageUpload = async (e) => {
+            const f = e.target.files[0];
+            if(f) { 
+                showToast("正在壓縮圖片...", "info");
+                try {
+                    const compressedDataUrl = await compressImage(f);
+                    selectedImageBase64 = compressedDataUrl.split(',')[1]; 
+                    setHTML('image-preview', `<img src="${compressedDataUrl}" class="h-16 rounded object-cover shadow-sm border border-gray-200">`); 
+                    showToast("圖片已處理", "success");
+                    closeModal('camera-choice'); // 關閉選擇彈窗
+                } catch(err) {
+                    showToast("圖片處理失敗", "error");
+                    console.error(err);
+                }
+            }
+        };
+
+        // NEW: 相機選擇邏輯
+        window.openCameraModal = () => {
+            document.getElementById('camera-choice-modal').classList.remove('hidden');
+        }
+
+        window.triggerCamera = () => {
+            document.getElementById('input-camera').click();
+        }
+
+        window.triggerGallery = () => {
+            document.getElementById('input-gallery').click();
+        }
+        
+        // NEW: 切換手動輸入欄位
+        window.toggleManualInput = (forceOpen = null) => {
+            const el = document.getElementById('manual-nutrition-block');
+            const isHidden = el.classList.contains('hidden');
+            if (forceOpen === true) el.classList.remove('hidden');
+            else if (forceOpen === false) el.classList.add('hidden');
+            else {
+                if(isHidden) el.classList.remove('hidden');
+                else el.classList.add('hidden');
+            }
+        }
 
         window.sendAIChat = async (contextType) => {
             if(!USER_API_KEY) return showToast("請先至設定頁面輸入 API Key", "error");
@@ -470,7 +503,7 @@
                 const healthHistory = dailyLogs.filter(l => l.kcal > 0 && new Date(l.dateStr) >= sevenDaysAgo).map(l => `${l.dateStr}: ${l.description} (${l.kcal}kcal)`).join("\n");
                 const kcalIn = todayLogs.reduce((a,b)=>a+(b.kcal||0),0);
                 const burned = todayLogs.reduce((a,b)=>a+(b.burned||0),0);
-                context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日攝取${kcalIn}, 消耗${burned}, 剩餘${userProfile.targetKcal+burned-kcalIn}。近期紀錄:${healthHistory}。請以條列式或重點整理回答用戶。`;
+                context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg/年齡${userProfile.age}/性別${userProfile.gender}, 目標${userProfile.targetKcal}kcal。今日攝取${kcalIn}, 消耗${burned}, 剩餘${userProfile.targetKcal+burned-kcalIn}。近期紀錄:${healthHistory}。請以條列式或重點整理回答用戶。`;
             } else if (contextType === 'finance') {
                 const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
                 const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
@@ -559,7 +592,7 @@
                 fixedAccSel.innerHTML = accounts.map(a => `<option value="${a.name}" ${item.note===a.name?'selected':''}>${a.name}</option>`).join('');
             } 
             else if(type === 'balance') { title.textContent = '資產校正'; if(id===-1) { noteContainer.classList.remove('hidden'); note.placeholder = '帳戶名稱'; } else { setValue('input-value', accounts[id].balance); noteContainer.classList.add('hidden'); } }
-            // NEW: Change Account Logic
+            
             else if (type === 'change_account') {
                 title.textContent = '修改扣款帳戶';
                 document.getElementById('input-default-container').classList.add('hidden');
@@ -568,7 +601,6 @@
                 const sel = document.getElementById('input-account-select');
                 sel.innerHTML = accounts.map(a => `<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('');
                 
-                // Set current selection
                 const currentLog = dailyLogs.find(l => l.id === id);
                 if(currentLog && currentLog.card) sel.value = currentLog.card;
             }
@@ -586,15 +618,12 @@
                     const amount = log.amount;
 
                     if (oldCard !== newCard) {
-                        // Revert old
                         const oldAccIdx = accounts.findIndex(a => a.name === oldCard);
                         if (oldAccIdx !== -1) accounts[oldAccIdx].balance += amount;
 
-                        // Deduct new
                         const newAccIdx = accounts.findIndex(a => a.name === newCard);
                         if (newAccIdx !== -1) accounts[newAccIdx].balance -= amount;
 
-                        // Update log
                         dailyLogs[logIdx].card = newCard;
                     }
                 }
@@ -678,13 +707,11 @@
             setText('dash-remain', userProfile.targetKcal + kcalBurn - kcalIn);
             setText('current-date-display', currentDate);
 
-            // Update Log Category Dropdown (Sync with Fixed Expenses)
             updateCategoryDropdown();
 
-            // Log List (with Icons & Edit/Delete Features)
+            // Log List
             const logListHtml = todayLogs.length ? todayLogs.map(l=>{
                 const icon = categoryIcons[l.category] || '📝';
-                // Clickable Card Name for Editing
                 const cardDisplay = l.card ? `<span onclick="openInputModal('change_account', '${l.id}')" class="cursor-pointer text-blue-500 hover:text-blue-700 hover:underline decoration-dotted" title="點擊修改帳戶">${l.card}</span>` : '無';
                 
                 return `
@@ -773,14 +800,14 @@
 
             setValue('prof-height', userProfile.height);
             setValue('prof-weight', userProfile.weight);
-            setValue('prof-age', userProfile.age); // NEW
+            setValue('prof-age', userProfile.age || 30);
+            setValue('prof-gender', userProfile.gender || 'male');
             
             setValue('ratio-ent', userProfile.entRatio || 20);
             setValue('ratio-inv', 100 - (userProfile.entRatio || 20));
             
             renderCalendar();
             
-            // Sync log category dropdown selection
             const currCat = document.getElementById('log-category').value;
             changeLogCategory(currCat);
         };
@@ -794,30 +821,18 @@
             refreshUI();
         };
         window.changeDate = (e) => { currentDate = e.target.value; refreshUI(); };
-        window.showToast = (m,t) => { const el=document.getElementById('toast'); el.textContent=m; el.className=`fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white ${t==='error'?'bg-red-500':'bg-black'} z-50`; el.classList.remove('hidden'); setTimeout(()=>el.classList.add('hidden'),2000); };
+        window.showToast = (m,t) => { const el=document.getElementById('toast'); el.textContent=m; el.className=`fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white ${t==='error'?'bg-red-500': t==='info'?'bg-blue-500':'bg-black'} z-50`; el.classList.remove('hidden'); setTimeout(()=>el.classList.add('hidden'),2000); };
         
-        // NEW: Function to sync Fixed Expenses with Log Categories
         const updateCategoryDropdown = () => {
             const select = document.getElementById('log-category');
             const currentVal = select.value;
-            
-            // Get names from fixed expenses ONLY (As requested: strictly follow fixed expenses)
-            // But we need to sort '食物' to the top if it exists
             let fixedNames = fixedExpenses.map(f => f.name);
-            
-            // Remove '食物' from list first to re-insert at top
             fixedNames = fixedNames.filter(n => n !== '食物');
-            
-            // Check if '食物' exists in fixedExpenses data, if so, put it first
             const hasFood = fixedExpenses.some(f => f.name === '食物');
-            
             let finalCats = [];
-            // Add '食物', then '娛樂', then '投資' (These are essential), then the rest of Fixed Expenses
             if (hasFood) finalCats.push('食物');
             finalCats.push('娛樂', '投資');
             finalCats = [...finalCats, ...fixedNames];
-            
-            // Remove duplicates just in case user added '娛樂' or '投資' manually to fixed list
             finalCats = [...new Set(finalCats)];
 
             select.innerHTML = finalCats.map(c => {
@@ -825,7 +840,6 @@
                 return `<option value="${c}">${icon} ${c}</option>`;
             }).join('');
             
-            // Restore selection if valid, otherwise default to first item
             if(finalCats.includes(currentVal)) select.value = currentVal;
             else if(finalCats.length > 0) select.value = finalCats[0];
         };
@@ -835,24 +849,6 @@
             const amtInput = document.getElementById('log-amount'); 
             const btn = document.getElementById('unified-log-btn');
             
-            // Manual Input Logic (NEW)
-            const manualDiv = document.getElementById('manual-inputs');
-            const manualKcal = document.getElementById('manual-kcal');
-            const manualProtBurn = document.getElementById('manual-prot-burn');
-            
-            if (v === '食物' || v === '餐費') {
-                manualDiv.classList.remove('hidden');
-                manualKcal.placeholder = '熱量 (手動)';
-                manualProtBurn.placeholder = '蛋白 (手動)';
-                manualProtBurn.classList.remove('hidden');
-            } else if (v === '運動') {
-                manualDiv.classList.remove('hidden');
-                manualKcal.placeholder = '消耗 (手動)';
-                manualProtBurn.classList.add('hidden'); 
-            } else {
-                manualDiv.classList.add('hidden');
-            }
-
             if (v === '運動') { 
                 cardSel.disabled = true; 
                 cardSel.innerHTML = '<option>無</option>';
@@ -860,21 +856,22 @@
                 amtInput.value = 0; 
                 amtInput.disabled = true; 
                 btn.textContent = '🔥 記錄'; 
+                toggleManualInput(false);
             } else { 
                 cardSel.disabled = false; 
                 amtInput.placeholder = '$'; 
                 amtInput.disabled = false; 
                 btn.textContent = '💰 記錄';
                 
-                // Logic Start
+                // 只有食物類別顯示手動輸入
+                if(v === '食物' || v === '餐費') toggleManualInput(true);
+                else toggleManualInput(false);
+                
                 let targetSelectAccount = '';
                 let budgetInfo = '';
                 const fixedItem = fixedExpenses.find(f => f.name === v);
 
-                // 1. Determine Target Account & Budget Info
-                // 1a. Check for Dynamic Budgets (Entertainment / Investment)
                 if (v === '娛樂' || v === '投資') {
-                    // Recalculate dynamic budget on the fly
                     const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
                     const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
                     const disposable = incomeTotal - fixedTotal;
@@ -887,39 +884,27 @@
                     const remaining = totalBudget - spent;
                     
                     budgetInfo = ` (預算剩: $${remaining})`;
-                    // No forced account for dynamic budgets, user chooses freely
                 }
-                // 1b. Check for Fixed Expense Link
                 else if (fixedItem) {
-                    // Calculate Budget
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
                     const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
                     const remaining = fixedItem.amount - spent;
                     budgetInfo = ` (預算剩: $${remaining})`;
-
-                    // Determine Account Connection -> NOW RELIES ON FIXED ITEM NOTE (Payment Account)
                     targetSelectAccount = fixedItem.note; 
                 }
 
-                // 2. Generate Options
                 const optionsHtml = accounts.map(a => {
-                    let label = `${a.name} ($${a.balance})`; // Default: Asset Inventory Connection
-
-                    // If this is the Linked Account for the Fixed Expense -> Connect to Fixed Expense Data
-                    // FIX: Check against targetSelectAccount, not fixedItem.note
+                    let label = `${a.name} ($${a.balance})`; 
                     if (fixedItem && a.name === targetSelectAccount) {
                         label = `✔ ${a.name}${budgetInfo}`; 
                     }
-
                     const isSelected = (a.name === targetSelectAccount);
                     return `<option value="${a.name}" ${isSelected ? 'selected' : ''}>${label}</option>`;
                 }).join('') + '<option value="custom">➕ 自訂...</option>';
 
                 cardSel.innerHTML = optionsHtml;
                 
-                // Hack: For Entertainment/Investment, since they don't lock an account, 
-                // we update the selected option's text AFTER generation if we want to show budget there
                 if (v === '娛樂' || v === '投資') {
                     Array.from(cardSel.options).forEach(opt => {
                         if (opt.value !== 'custom') {
@@ -930,11 +915,28 @@
             }
         };
 
-        // window.onload = initApp; // 移除這行導致當機的錯誤代碼
+        window.onload = initApp; // Safety check
+        function initApp() { /* Init handled by DOMContentLoaded */ }
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
     <div id="toast" class="hidden"></div>
+
+    <!-- NEW: Camera Choice Modal -->
+    <div id="camera-choice-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onclick="closeModal('camera-choice')">
+        <div class="bg-white w-full max-w-xs rounded-xl p-5 shadow-xl text-center" onclick="event.stopPropagation()">
+            <h3 class="font-bold mb-4 text-lg">選擇圖片來源</h3>
+            <div class="flex flex-col gap-3">
+                <button onclick="triggerCamera()" class="bg-blue-50 text-blue-600 py-3 rounded-lg font-bold border border-blue-100 hover:bg-blue-100 flex items-center justify-center gap-2">📷 拍照 (Camera)</button>
+                <button onclick="triggerGallery()" class="bg-gray-50 text-gray-600 py-3 rounded-lg font-bold border border-gray-200 hover:bg-gray-100 flex items-center justify-center gap-2">🖼️ 相簿 (Album)</button>
+                <button onclick="closeModal('camera-choice')" class="mt-2 text-gray-400 text-sm">取消</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Hidden Inputs for Dual Logic -->
+    <input type="file" id="input-camera" accept="image/*" capture="environment" onchange="handleImageUpload(event)" class="hidden-input">
+    <input type="file" id="input-gallery" accept="image/*" onchange="handleImageUpload(event)" class="hidden-input">
 
     <div id="verify-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
         <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
@@ -943,6 +945,7 @@
             <div class="flex gap-2 mt-4"><button onclick="closeModal('verify')" class="flex-1 bg-gray-100 py-2 rounded font-bold text-gray-500">取消</button><button onclick="confirmVerifyLog()" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold shadow-lg">確認存檔</button></div>
         </div>
     </div>
+    
     <div id="input-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
         <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl">
             <h3 id="input-modal-title" class="font-bold mb-4 text-lg">輸入資料</h3>
@@ -969,7 +972,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V21.0</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.0</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -1001,7 +1004,7 @@
                 </div>
                 <div class="bg-gray-800 p-2 rounded-xl text-center text-white shadow-sm">
                     <div class="text-[10px] opacity-70">剩餘熱量</div>
-                    <div id="dash-remain" class="text-lg font-black">1600</div>
+                    <div id="dash-remain" class="text-lg font-black">1500</div>
                 </div>
             </div>
 
@@ -1013,13 +1016,24 @@
                 </div>
                 <input id="finance-card-custom" type="text" placeholder="輸入帳戶名稱" class="w-full border p-2 rounded text-sm mb-2 hidden">
                 <div class="flex items-center gap-2 mb-2">
-                     <label class="bg-gray-50 border border-gray-200 rounded-lg p-2 cursor-pointer flex items-center justify-center w-12 hover:bg-gray-100"><input type="file" accept="image/*" onchange="handleImageUpload(event)" class="hidden"><span class="text-xl">📷</span></label>
+                     <button onclick="openCameraModal()" class="bg-gray-50 border border-gray-200 rounded-lg p-2 cursor-pointer flex items-center justify-center w-12 hover:bg-gray-100 text-xl">📷</button>
                     <input id="log-description" placeholder="描述 (如: 雞腿便當)" class="flex-grow border border-gray-200 p-2 rounded text-sm h-10">
                     <input id="log-amount" type="number" placeholder="$" class="w-16 border border-gray-200 p-2 rounded text-center font-bold text-sm h-10">
                 </div>
-                <div id="manual-inputs" class="flex gap-2 mb-2 hidden">
-                    <input id="manual-kcal" type="number" placeholder="熱量 (手動)" class="flex-1 border border-orange-200 bg-orange-50 p-2 rounded text-xs text-center font-bold text-orange-800">
-                    <input id="manual-prot-burn" type="number" placeholder="蛋白 (手動)" class="flex-1 border border-green-200 bg-green-50 p-2 rounded text-xs text-center font-bold text-green-800">
+                
+                <!-- NEW: 手動輸入營養區塊 (預設隱藏) -->
+                <div id="manual-nutrition-block" class="bg-gray-50 p-2 rounded mb-2 border border-dashed border-gray-300 hidden">
+                    <div class="text-[10px] text-gray-400 mb-1">✍️ 手動輸入營養 (若填寫將不使用AI估算)</div>
+                    <div class="flex gap-2">
+                        <div class="flex-1 relative">
+                            <input id="log-manual-kcal" type="number" placeholder="熱量" class="w-full border p-1 rounded text-sm text-center pl-4">
+                            <span class="absolute left-1 top-1.5 text-xs text-gray-400">🔥</span>
+                        </div>
+                        <div class="flex-1 relative">
+                            <input id="log-manual-protein" type="number" placeholder="蛋白" class="w-full border p-1 rounded text-sm text-center pl-4">
+                            <span class="absolute left-1 top-1.5 text-xs text-gray-400">🥚</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="image-preview" class="mb-2 flex justify-start"></div>
@@ -1092,11 +1106,27 @@
 
         <div id="settings-view" class="tab-view hidden">
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">👤 體態設定</h3>
-                <div class="mb-3">
-                    <label class="text-xs text-gray-500">身高 (cm)</label><input id="prof-height" type="number" class="w-full border p-2 rounded mb-2">
-                    <label class="text-xs text-gray-500">體重 (kg)</label><input id="prof-weight" type="number" class="w-full border p-2 rounded mb-2">
-                    <label class="text-xs text-gray-500">年齡 (歲)</label><input id="prof-age" type="number" class="w-full border p-2 rounded">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">👤 體態設定 (TDEE - 500)</h3>
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                        <label class="text-xs text-gray-500">身高 (cm)</label>
+                        <input id="prof-height" type="number" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">體重 (kg)</label>
+                        <input id="prof-weight" type="number" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">年齡 (Age)</label>
+                        <input id="prof-age" type="number" class="w-full border p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">性別</label>
+                        <select id="prof-gender" class="w-full border p-2 rounded bg-white">
+                            <option value="male">男</option>
+                            <option value="female">女</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -1147,7 +1177,7 @@
                 </div>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach V21.0<br>(Based on V17 Fix)</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.0<br>(Compress + TDEE-500)</div>
         </div>
     </main>
 
