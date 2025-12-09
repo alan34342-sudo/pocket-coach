@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18</title>
+    <title>Pocket Coach v18.2</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -63,7 +63,6 @@
         let fixedExpenses = [];
         let investments = []; 
         let dailyLogs = [];
-        // NEW: 加入 age, gender 預設值
         let userProfile = { height: 172, weight: 69, age: 30, gender: 'male', tdee: 2000, targetKcal: 1500, entRatio: 20 };
 
         // Defaults
@@ -97,7 +96,6 @@
             ACTIVE_MODEL = localStorage.getItem('gemini_model') || "gemini-1.5-flash";
             
             userProfile = DB.get('profile', userProfile);
-            // 確保新欄位有預設值 (舊資料遷移)
             if(!userProfile.age) userProfile.age = 30;
             if(!userProfile.gender) userProfile.gender = 'male';
 
@@ -123,7 +121,7 @@
                     document.getElementById('setting-model-custom').value = ACTIVE_MODEL;
                 }
             }
-            refreshUI();
+            refreshUI(); // 這裡呼叫 refreshUI，必須確保它有被定義
         };
 
         const saveData = () => {
@@ -136,14 +134,11 @@
             refreshUI();
         };
 
-        // --- 核心計算 (Updated for Age & Gender) ---
-        // Mifflin-St Jeor 公式
+        // --- 核心計算 ---
         const calculateTDEE = (w, h, age, gender) => {
-            // s = +5 for male, -161 for female
             const s = gender === 'male' ? 5 : -161;
             const bmr = (10 * w) + (6.25 * h) - (5 * age) + s;
-            const tdee = Math.round(bmr * 1.375); // 輕度活動
-            // NEW: TDEE - 500
+            const tdee = Math.round(bmr * 1.375); 
             return { tdee, target: tdee - 500 };
         };
 
@@ -320,10 +315,19 @@
                     }
                 } 
                 else if (category === '運動') {
-                    const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。請只回傳JSON格式: {"burned": 數字}。`);
-                    if(res.error) throw new Error(res.error);
-                    window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' };
-                    setupVerifyModal('exercise', res);
+                    // NEW: 運動也有手動輸入
+                    if (manualKcal) { // 這裡的 manualKcal 對應到運動是 "Burned"
+                         const manualData = { burned: parseInt(manualKcal) || 0 };
+                         commitLog({ description, amount: 0, category, card: '', type: 'exercise', ...manualData });
+                         showToast('紀錄成功 (手動消耗)', 'success');
+                         resetLogForm();
+                    } else {
+                        // NEW PROMPT: 增加預設 30 分鐘的指示
+                        const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。若未指定時間，請預設為30分鐘。請只回傳JSON格式: {"burned": 數字}。`);
+                        if(res.error) throw new Error(res.error);
+                        window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' };
+                        setupVerifyModal('exercise', res);
+                    }
                 } 
                 else {
                     commitLog({ description, amount, category, card, type: 'finance' });
@@ -400,7 +404,10 @@
             // 清空手動輸入
             document.getElementById('log-manual-kcal').value = '';
             document.getElementById('log-manual-protein').value = '';
-            toggleManualInput(false); // 收起手動區塊
+            
+            // 根據當前類別重置手動輸入區塊
+            const currentCat = document.getElementById('log-category').value;
+            changeLogCategory(currentCat);
 
             setHTML('image-preview', '');
             selectedImageBase64 = null;
@@ -471,15 +478,34 @@
             document.getElementById('input-gallery').click();
         }
         
-        // NEW: 切換手動輸入欄位
-        window.toggleManualInput = (forceOpen = null) => {
-            const el = document.getElementById('manual-nutrition-block');
-            const isHidden = el.classList.contains('hidden');
-            if (forceOpen === true) el.classList.remove('hidden');
-            else if (forceOpen === false) el.classList.add('hidden');
-            else {
-                if(isHidden) el.classList.remove('hidden');
-                else el.classList.add('hidden');
+        // NEW: 切換手動輸入欄位 (改進版：支援 'food' 和 'exercise' 模式)
+        window.toggleManualInput = (mode) => {
+            const block = document.getElementById('manual-nutrition-block');
+            const kcalContainer = document.getElementById('manual-kcal-container');
+            const proteinContainer = document.getElementById('manual-protein-container');
+            const kcalInput = document.getElementById('log-manual-kcal');
+            const kcalLabel = document.getElementById('manual-kcal-label');
+            const hint = document.getElementById('manual-hint-text');
+
+            if (mode === 'none') {
+                block.classList.add('hidden');
+            } else {
+                block.classList.remove('hidden');
+                if (mode === 'food') {
+                    hint.textContent = '✍️ 手動輸入營養 (若填寫將不使用AI估算)';
+                    kcalLabel.textContent = '🔥';
+                    kcalInput.placeholder = '熱量';
+                    kcalContainer.classList.remove('w-full');
+                    kcalContainer.classList.add('flex-1'); // 恢復一半寬度
+                    proteinContainer.classList.remove('hidden'); // 顯示蛋白
+                } else if (mode === 'exercise') {
+                    hint.textContent = '✍️ 手動輸入消耗 (若填寫將不使用AI估算)';
+                    kcalLabel.textContent = '🏃';
+                    kcalInput.placeholder = '消耗熱量 (Kcal)';
+                    kcalContainer.classList.remove('flex-1'); 
+                    kcalContainer.classList.add('w-full'); // 佔滿整行
+                    proteinContainer.classList.add('hidden'); // 隱藏蛋白
+                }
             }
         }
 
@@ -691,6 +717,7 @@
         window.selectDate = (d) => { currentDate = d; refreshUI(); window.toggleCalendar(); };
         window.jumpToToday = () => { currentDate = getLocalDate(); currentViewMonth = new Date(); refreshUI(); };
 
+        // 重新補上完整的 refreshUI 函式
         const refreshUI = () => {
             const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
             const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(currentDate.substring(0,7)));
@@ -831,7 +858,7 @@
             const hasFood = fixedExpenses.some(f => f.name === '食物');
             let finalCats = [];
             if (hasFood) finalCats.push('食物');
-            finalCats.push('娛樂', '投資');
+            finalCats.push('娛樂', '投資', '運動'); // 這裡確保加入 '運動'
             finalCats = [...finalCats, ...fixedNames];
             finalCats = [...new Set(finalCats)];
 
@@ -856,16 +883,18 @@
                 amtInput.value = 0; 
                 amtInput.disabled = true; 
                 btn.textContent = '🔥 記錄'; 
-                toggleManualInput(false);
+                
+                // NEW: 運動模式顯示手動輸入消耗
+                toggleManualInput('exercise');
             } else { 
                 cardSel.disabled = false; 
                 amtInput.placeholder = '$'; 
                 amtInput.disabled = false; 
                 btn.textContent = '💰 記錄';
                 
-                // 只有食物類別顯示手動輸入
-                if(v === '食物' || v === '餐費') toggleManualInput(true);
-                else toggleManualInput(false);
+                // 食物類別顯示手動營養，其他隱藏
+                if(v === '食物' || v === '餐費') toggleManualInput('food');
+                else toggleManualInput('none');
                 
                 let targetSelectAccount = '';
                 let budgetInfo = '';
@@ -972,7 +1001,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.0</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.2</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -1021,17 +1050,17 @@
                     <input id="log-amount" type="number" placeholder="$" class="w-16 border border-gray-200 p-2 rounded text-center font-bold text-sm h-10">
                 </div>
                 
-                <!-- NEW: 手動輸入營養區塊 (預設隱藏) -->
+                <!-- NEW: 手動輸入營養區塊 (動態切換) -->
                 <div id="manual-nutrition-block" class="bg-gray-50 p-2 rounded mb-2 border border-dashed border-gray-300 hidden">
-                    <div class="text-[10px] text-gray-400 mb-1">✍️ 手動輸入營養 (若填寫將不使用AI估算)</div>
+                    <div id="manual-hint-text" class="text-[10px] text-gray-400 mb-1">✍️ 手動輸入營養</div>
                     <div class="flex gap-2">
-                        <div class="flex-1 relative">
-                            <input id="log-manual-kcal" type="number" placeholder="熱量" class="w-full border p-1 rounded text-sm text-center pl-4">
-                            <span class="absolute left-1 top-1.5 text-xs text-gray-400">🔥</span>
+                        <div id="manual-kcal-container" class="flex-1 relative h-10">
+                            <input id="log-manual-kcal" type="number" placeholder="熱量" class="w-full h-full border p-1 rounded text-sm text-center pl-4 appearance-none">
+                            <span id="manual-kcal-label" class="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">🔥</span>
                         </div>
-                        <div class="flex-1 relative">
-                            <input id="log-manual-protein" type="number" placeholder="蛋白" class="w-full border p-1 rounded text-sm text-center pl-4">
-                            <span class="absolute left-1 top-1.5 text-xs text-gray-400">🥚</span>
+                        <div id="manual-protein-container" class="flex-1 relative h-10">
+                            <input id="log-manual-protein" type="number" placeholder="蛋白" class="w-full h-full border p-1 rounded text-sm text-center pl-4 appearance-none">
+                            <span class="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">🥚</span>
                         </div>
                     </div>
                 </div>
@@ -1177,7 +1206,7 @@
                 </div>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.0<br>(Compress + TDEE-500)</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.2<br>(Added Exercise to Menu)</div>
         </div>
     </main>
 
