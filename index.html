@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.3 (Balance UI)</title>
+    <title>Pocket Coach v18.3</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -762,33 +762,38 @@
             }).join('') : '<div class="text-center text-gray-400 py-4">本日無紀錄</div>';
             setHTML('log-list', logListHtml);
 
-            // Fixed List Rendering
-            setHTML('dash-fixed-list', fixedExpenses.map(f => {
+            // Fixed List Rendering & Calculation
+            let totalFixedRemaining = 0;
+            const fixedListHtml = fixedExpenses.map(f => {
                 const spentThisMonth = monthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
                 const remaining = f.amount - spentThisMonth;
                 const isPaid = spentThisMonth > 0;
                 
+                totalFixedRemaining += remaining;
+
                 return `
                 <div class="flex justify-between p-2 text-sm border-b items-center">
                     <div class="flex items-center gap-2">
                         ${isPaid ? '<span class="text-green-500 text-xs">🟢</span>' : '<span class="text-gray-200 text-xs">⚪</span>'}
                         <div>
                             <div class="font-medium">${f.name}</div>
-                            <div class="text-xs text-gray-400">綁定: ${f.note}</div> 
+                            <div class="text-xs text-gray-400">剩餘: $${remaining} · 綁定: ${f.note}</div>
                         </div>
                     </div>
-                    <div class="flex items-center gap-3">
-                        <div class="text-right">
-                             <div class="text-[10px] text-gray-400">剩餘</div>
-                             <div class="font-bold ${remaining < 0 ? 'text-red-500' : 'text-green-600'}">$${remaining}</div>
-                        </div>
-                        <div class="flex items-center">
-                            <span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded text-gray-800 text-lg" onclick="openInputModal('fixed_edit', ${f.id})">$${f.amount}</span>
-                            <button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button>
-                        </div>
+                    <div class="flex items-center">
+                        <span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded ${remaining < 0 ? 'text-red-500' : 'text-gray-800'}" onclick="openInputModal('fixed_edit', ${f.id})">$${f.amount}</span>
+                        <button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button>
                     </div>
                 </div>`;
-            }).join(''));
+            }).join('');
+            setHTML('dash-fixed-list', fixedListHtml);
+            
+            // Update Total Fixed Remaining Text
+            const fixedTotalEl = document.getElementById('fixed-total-remaining');
+            if(fixedTotalEl) {
+                fixedTotalEl.textContent = `$${totalFixedRemaining}`;
+                fixedTotalEl.className = `font-bold ${totalFixedRemaining < 0 ? 'text-red-600' : 'text-green-600'}`;
+            }
 
             // --- 核心修正區塊開始 ---
             const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
@@ -971,6 +976,7 @@
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
     <div id="toast" class="hidden"></div>
 
+    <!-- NEW: Camera Choice Modal -->
     <div id="camera-choice-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onclick="closeModal('camera-choice')">
         <div class="bg-white w-full max-w-xs rounded-xl p-5 shadow-xl text-center" onclick="event.stopPropagation()">
             <h3 class="font-bold mb-4 text-lg">選擇圖片來源</h3>
@@ -982,6 +988,7 @@
         </div>
     </div>
     
+    <!-- Hidden Inputs for Dual Logic -->
     <input type="file" id="input-camera" accept="image/*" capture="environment" onchange="handleImageUpload(event)" class="hidden-input">
     <input type="file" id="input-gallery" accept="image/*" onchange="handleImageUpload(event)" class="hidden-input">
 
@@ -1019,7 +1026,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.2</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.3</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -1068,6 +1075,7 @@
                     <input id="log-amount" type="number" placeholder="$" class="w-16 border border-gray-200 p-2 rounded text-center font-bold text-sm h-10">
                 </div>
                 
+                <!-- NEW: 手動輸入營養區塊 (動態切換) -->
                 <div id="manual-nutrition-block" class="bg-gray-50 p-2 rounded mb-2 border border-dashed border-gray-300 hidden">
                     <div id="manual-hint-text" class="text-[10px] text-gray-400 mb-1">✍️ 手動輸入營養</div>
                     <div class="flex gap-2">
@@ -1101,7 +1109,13 @@
             </div>
 
             <div class="bg-white rounded-xl shadow-sm p-4 border border-red-100">
-                <div class="flex justify-between items-center mb-2 border-b pb-2"><h3 class="font-bold text-red-800 text-sm">🔒 每月固定支出</h3><button onclick="openInputModal('fixed_add')" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">＋ 新增</button></div>
+                <div class="flex justify-between items-center mb-2 border-b pb-2">
+                    <div>
+                        <h3 class="font-bold text-red-800 text-sm">🔒 每月固定支出</h3>
+                        <div class="text-[10px] text-gray-400 mt-1">總剩餘: <span id="fixed-total-remaining" class="font-bold text-green-600">$0</span></div>
+                    </div>
+                    <button onclick="openInputModal('fixed_add')" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">＋ 新增</button>
+                </div>
                 <div id="dash-fixed-list"></div>
             </div>
         </div>
@@ -1223,7 +1237,7 @@
                 </div>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.2<br>(Added Exercise to Menu)</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.3<br>(Added Exercise to Menu)</div>
         </div>
     </main>
 
