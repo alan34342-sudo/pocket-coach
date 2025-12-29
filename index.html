@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.3</title>
+    <title>Pocket Coach v18.4 (Portfolio)</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -630,6 +630,18 @@
                 const currentLog = dailyLogs.find(l => l.id === id);
                 if(currentLog && currentLog.card) sel.value = currentLog.card;
             }
+            // NEW: Investment Add Logic
+            else if(type === 'investment_add') {
+                title.textContent = '新增投資紀錄';
+                noteContainer.classList.remove('hidden');
+                note.placeholder = '標的名稱 (如: 0050)';
+                setValue('input-value', '');
+                
+                // Enable account selection for deduction
+                document.getElementById('input-account-container').classList.remove('hidden');
+                const sel = document.getElementById('input-account-select');
+                sel.innerHTML = accounts.map(a => `<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('');
+            }
         };
 
         window.submitInputModal = async () => {
@@ -674,6 +686,14 @@
                 }
                 
                 if(window.inputType === 'balance') { if(window.inputId === -1) { if(!n) return; accounts.push({name:n, balance:v}); } else { accounts[window.inputId].balance = v; } }
+
+                // NEW: Investment Add Logic
+                if(window.inputType === 'investment_add') {
+                    if(!n || !v) return showToast('請輸入名稱與金額', 'error');
+                    const acc = document.getElementById('input-account-select').value;
+                    commitLog({ description: n, amount: v, category: '投資', card: acc, type: 'finance' });
+                    showToast('投資紀錄已新增', 'success');
+                }
             }
             saveData();
             closeModal('input');
@@ -805,6 +825,18 @@
             const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
             const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0); // 固定支出「預算」總和
 
+            // 1. 先算出本月所有流水帳的總支出
+            const totalLogSpent = monthLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
+            
+            // 2. 找出屬於「固定支出類別」的實際花費 (為了從總支出中扣除，避免重複計算)
+            const fixedCatNames = fixedExpenses.map(f => f.name);
+            const spentOnFixedLogs = monthLogs
+                .filter(l => fixedCatNames.includes(l.category) && l.type.includes('finance'))
+                .reduce((a,b) => a + (b.amount||0), 0);
+
+            // 3. 計算「真正的變動支出」 = 總支出 - 固定類別支出
+            const realVariableSpent = totalLogSpent - spentOnFixedLogs;
+
             const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
             const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
 
@@ -845,6 +877,25 @@
             
             setHTML('rep-acc-list', accounts.map((a,i)=>`<div class="flex justify-between p-2 text-sm border-b"><span>${a.name}</span><div><span class="font-bold ${a.balance<0?'text-red-500':'text-blue-600'}">$${a.balance}</span> <button onclick="openInputModal('balance',${i})" class="text-gray-400 ml-2">✎</button></div></div>`).join(''));
             
+            // NEW: Portfolio Calculation & Rendering
+            const portfolio = {};
+            dailyLogs.filter(l => l.category === '投資').forEach(l => {
+                // Use description as symbol/target name
+                const symbol = l.description.trim();
+                if(symbol) {
+                    portfolio[symbol] = (portfolio[symbol] || 0) + (l.amount || 0);
+                }
+            });
+
+            const portfolioHtml = Object.keys(portfolio).length > 0 ? Object.entries(portfolio).map(([symbol, amount]) => `
+                <div class="flex justify-between items-center p-2 border-b border-gray-100 last:border-0">
+                    <div class="font-medium text-gray-700">${symbol}</div>
+                    <div class="font-bold text-gray-900">$${amount.toLocaleString()}</div>
+                </div>
+            `).join('') : '<div class="text-center text-gray-400 text-xs py-2">尚無持倉紀錄，請點擊右上角新增</div>';
+            
+            setHTML('portfolio-list', portfolioHtml);
+
             setHTML('inv-list', investments.map(i=>`
                 <div class="bg-gray-50 p-3 rounded-xl mb-3 border border-gray-100">
                     <div class="flex justify-between items-start mb-2"><div><span class="bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded text-xs">${i.symbol}</span><span class="text-xs text-gray-400 ml-2">${i.date}</span></div>
@@ -1029,7 +1080,7 @@
 
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.3</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.4</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅 展開月曆</button>
@@ -1152,6 +1203,17 @@
         </div>
 
         <div id="investment-view" class="tab-view hidden">
+            <!-- NEW: Portfolio Section -->
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-blue-200">
+                <div class="flex justify-between items-center mb-3 border-b border-blue-100 pb-2">
+                    <h3 class="font-bold text-blue-800 text-sm flex items-center gap-1">💰 我的持倉 (累積投入)</h3>
+                    <button onclick="openInputModal('investment_add')" class="bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-lg shadow hover:bg-blue-700 active:scale-95">＋ 買入</button>
+                </div>
+                <div id="portfolio-list" class="space-y-1">
+                    <!-- Portfolio items will be rendered here -->
+                </div>
+            </div>
+
             <div class="bg-white rounded-xl shadow-sm border border-indigo-200 p-4 mb-4">
                 <h3 class="font-bold text-indigo-700 text-sm mb-3 flex items-center border-b border-indigo-100 pb-2"><span class="text-lg mr-2">📈</span> 投資顧問 (全知模式)</h3>
                 <div id="finance-chat-box" class="h-64 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">我可以分析您的持股狀況...</div></div>
@@ -1240,7 +1302,7 @@
                 </div>
             </div>
             
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.3<br>(Added Exercise to Menu)</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.4<br>(Added Exercise to Menu)</div>
         </div>
     </main>
 
