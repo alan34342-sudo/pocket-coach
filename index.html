@@ -780,9 +780,15 @@
                             <div class="text-xs text-gray-400">剩餘: $${remaining} · 綁定: ${f.note}</div>
                         </div>
                     </div>
-                    <div class="flex items-center">
-                        <span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded ${remaining < 0 ? 'text-red-500' : 'text-gray-800'}" onclick="openInputModal('fixed_edit', ${f.id})">$${f.amount}</span>
-                        <button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button>
+                    <div class="flex items-center gap-3">
+                        <div class="text-right">
+                             <div class="text-[10px] text-gray-400">剩餘</div>
+                             <div class="font-bold ${remaining < 0 ? 'text-red-500' : 'text-green-600'}">$${remaining}</div>
+                        </div>
+                        <div class="flex items-center">
+                            <span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded text-gray-800 text-lg" onclick="openInputModal('fixed_edit', ${f.id})">$${f.amount}</span>
+                            <button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button>
+                        </div>
                     </div>
                 </div>`;
             }).join('');
@@ -799,32 +805,29 @@
             const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
             const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0); // 固定支出「預算」總和
 
-            // 1. 先算出本月所有流水帳的總支出
-            const totalLogSpent = monthLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
-            
-            // 2. 找出屬於「固定支出類別」的實際花費 (為了從總支出中扣除，避免重複計算)
-            const fixedCatNames = fixedExpenses.map(f => f.name);
-            const spentOnFixedLogs = monthLogs
-                .filter(l => fixedCatNames.includes(l.category) && l.type.includes('finance'))
-                .reduce((a,b) => a + (b.amount||0), 0);
-
-            // 3. 計算「真正的變動支出」 = 總支出 - 固定類別支出
-            const realVariableSpent = totalLogSpent - spentOnFixedLogs;
-
             const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
             const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
 
             const disposableIncome = incomeTotal - fixedTotal; // 可支配 = 收入 - 固定預算
-            const monthlyRemaining = disposableIncome - realVariableSpent; // 最終餘額 = 可支配 - 變動支出(已排除固定項目花費)
-            // --- 核心修正區塊結束 ---
-
-            setText('dash-month-remain', `$${monthlyRemaining.toLocaleString()}`);
 
             const entRatio = userProfile.entRatio || 20;
             const invRatio = 100 - entRatio;
             
-            const entBudget = Math.floor(disposableIncome * (entRatio / 100));
-            const invBudget = Math.floor(disposableIncome * (invRatio / 100));
+            // 改為四捨五入，並用減法確保總和正確 (避免差 1 元的問題)
+            const entBudget = Math.round(disposableIncome * (entRatio / 100));
+            const invBudget = disposableIncome - entBudget;
+
+            // 計算最終剩餘 (固定剩餘 + 娛樂剩餘 + 投資剩餘)
+            const entRemaining = entBudget - entSpent;
+            const invRemaining = invBudget - invSpent;
+            const finalDashRemaining = totalFixedRemaining + entRemaining + invRemaining;
+
+            setText('dash-month-remain', `$${finalDashRemaining.toLocaleString()}`);
+
+            // 為了報表頁面的顯示 (保持邏輯一致性)
+            const monthlyRemaining = finalDashRemaining; 
+            // 這裡將 monthlyRemaining 更新為新的邏輯，確保兩邊顯示一致 (雖然原本報表是用減法，但新邏輯更精確反映三個桶子的剩餘)
+            // --- 核心修正區塊結束 ---
 
             ['salary','bonus','overtime','oncall'].forEach(k => { const el=document.getElementById(`inc-${k}`); if(el) el.value=monthlyIncome[k]; });
             
@@ -832,10 +835,10 @@
             setText('rep-disposable', `$${disposableIncome.toLocaleString()}`);
             setText('rep-final', `$${monthlyRemaining.toLocaleString()}`);
             
-            setText('rep-ent-val', `$${(entBudget - entSpent).toLocaleString()}`);
+            setText('rep-ent-val', `$${entRemaining.toLocaleString()}`);
             setText('rep-ent-label', `娛樂 ${entRatio}% (預算$${entBudget})`);
             
-            setText('rep-inv-val', `$${(invBudget - invSpent).toLocaleString()}`);
+            setText('rep-inv-val', `$${invRemaining.toLocaleString()}`);
             setText('rep-inv-label', `投資 ${invRatio}% (預算$${invBudget})`);
 
             setText('rep-total-fix', `-$${fixedTotal.toLocaleString()}`);
