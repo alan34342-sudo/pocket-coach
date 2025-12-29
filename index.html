@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.6</title>
+    <title>Pocket Coach v18.7</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -90,7 +90,7 @@
         // --- Init ---
         document.addEventListener('DOMContentLoaded', () => {
             loadData();
-            switchTab('dashboard');
+            switchTab('dashboard'); // 這裡確保一打開就是駕駛艙
         });
 
         const loadData = () => {
@@ -139,7 +139,6 @@
 
         // --- Helper Functions (Hoisted) ---
         
-        // 1. Toggle Manual Input
         window.toggleManualInput = (mode) => {
             const block = document.getElementById('manual-nutrition-block');
             if(!block) return;
@@ -162,7 +161,6 @@
             }
         };
 
-        // 2. Change Log Category
         window.changeLogCategory = (v) => {
             const cardSel = document.getElementById('log-card'); 
             const amtInput = document.getElementById('log-amount'); 
@@ -229,7 +227,6 @@
                 if (v === '娛樂' || v === '投資') {
                     Array.from(cardSel.options).forEach(opt => {
                         if (opt.value !== 'custom') {
-                            // Append budget info, keep account balance info
                             opt.text = `${opt.text} ${budgetInfo}`;
                         }
                     });
@@ -237,7 +234,6 @@
             }
         };
 
-        // 3. Update Category Dropdown
         const updateCategoryDropdown = () => {
             const select = document.getElementById('log-category');
             if(!select) return;
@@ -260,7 +256,6 @@
             else if(finalCats.length > 0) select.value = finalCats[0];
         };
 
-        // 4. Render Calendar
         const renderCalendar = () => {
             const calContainer = document.getElementById('calendar-grid');
             if(!calContainer) return;
@@ -285,7 +280,7 @@
         };
 
         // --- Core Calc ---
-        const calculateTDEE = (w, h, age, gender) => { /* ... */ const s = gender === 'male' ? 5 : -161; const bmr = (10 * w) + (6.25 * h) - (5 * age) + s; const tdee = Math.round(bmr * 1.375); return { tdee, target: tdee - 500 }; };
+        const calculateTDEE = (w, h, age, gender) => { const s = gender === 'male' ? 5 : -161; const bmr = (10 * w) + (6.25 * h) - (5 * age) + s; const tdee = Math.round(bmr * 1.375); return { tdee, target: tdee - 500 }; };
 
         window.updateInvFromEnt = (val) => { let ent = parseInt(val) || 0; if (ent > 100) ent = 100; if (ent < 0) ent = 0; document.getElementById('ratio-inv').value = 100 - ent; };
         window.updateEntFromInv = (val) => { let inv = parseInt(val) || 0; if (inv > 100) inv = 100; if (inv < 0) inv = 0; document.getElementById('ratio-ent').value = 100 - inv; };
@@ -661,105 +656,17 @@
         window.openCameraModal = () => document.getElementById('camera-choice-modal').classList.remove('hidden');
         window.triggerCamera = () => document.getElementById('input-camera').click();
         window.triggerGallery = () => document.getElementById('input-gallery').click();
-
-        window.addInvestment = async () => {
-            const s = document.getElementById('inv-symbol').value;
-            const n = document.getElementById('inv-note').value;
-            if(!s || !n) return showToast('請輸入內容', 'error');
-            const btn = document.getElementById('inv-add-btn'); btn.textContent = '分析中...'; btn.disabled = true;
-            try {
-                const res = await callAI(`分析投資:${s}。觀點:${n}。風險評估。簡短回覆。`);
-                const txt = typeof res === 'object' ? `Error: ${res.error}` : res;
-                investments.push({ id: Date.now().toString(), symbol: s, note: n, feedback: txt, date: new Date().toLocaleDateString() }); 
-                saveData();
-                document.getElementById('inv-symbol').value = ''; document.getElementById('inv-note').value = '';
-                showToast('已新增', 'success');
-            } catch(e) { investments.push({ id: Date.now().toString(), symbol: s, note: n, feedback: "API Error", date: new Date().toLocaleDateString() }); saveData(); } 
-            finally { btn.textContent = '＋ 新增並 AI 分析'; btn.disabled = false; }
+        
+        window.removeFixed = async (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); saveData(); };
+        
+        window.switchTab = (t) => {
+            document.querySelectorAll('.tab-view').forEach(e=>e.classList.add('hidden'));
+            document.getElementById(`${t}-view`).classList.remove('hidden');
+            document.querySelectorAll('.nav-btn').forEach(e=>e.classList.remove('text-blue-600'));
+            const btn = document.getElementById(`nav-${t}`);
+            if(btn) btn.classList.add('text-blue-600');
+            refreshUI();
         };
-
-        window.removeInvestment = async (idStr) => {
-            if(!confirm("確定刪除筆記？")) return;
-            investments = investments.filter(i => String(i.id) !== String(idStr));
-            await saveData('inv');
-        };
-
-        // --- Modals ---
-        window.openInputModal = (type, id=null) => {
-            window.inputType = type; window.inputId = id;
-            document.getElementById('input-default-container').classList.remove('hidden');
-            document.getElementById('input-account-container').classList.add('hidden');
-            document.getElementById('input-fixed-acc-container').classList.add('hidden');
-            setValue('input-value', ''); setValue('input-note', '');
-            document.getElementById('input-modal').classList.remove('hidden');
-            const title = document.getElementById('input-modal-title');
-            
-            if(type === 'income') { title.textContent = '修改收入'; setValue('input-value', monthlyIncome[id]); document.getElementById('input-note-container').classList.add('hidden'); } 
-            else if(type === 'fixed_add') { 
-                title.textContent = '新增固定支出'; 
-                document.getElementById('input-note-container').classList.remove('hidden'); 
-                document.getElementById('input-fixed-acc-container').classList.remove('hidden');
-                document.getElementById('input-fixed-acc-select').innerHTML = accounts.map(a => `<option value="${a.name}">${a.name}</option>`).join('');
-            } 
-            else if (type === 'fixed_edit') { 
-                title.textContent = '修改固定支出'; 
-                const item = fixedExpenses.find(f=>f.id===id);
-                setValue('input-value', item.amount); 
-                document.getElementById('input-note-container').classList.add('hidden'); 
-                document.getElementById('input-fixed-acc-container').classList.remove('hidden');
-                document.getElementById('input-fixed-acc-select').innerHTML = accounts.map(a => `<option value="${a.name}" ${item.note===a.name?'selected':''}>${a.name}</option>`).join('');
-            } 
-            else if(type === 'balance') { title.textContent = '資產校正'; if(id===-1) { document.getElementById('input-note-container').classList.remove('hidden'); } else { setValue('input-value', accounts[id].balance); document.getElementById('input-note-container').classList.add('hidden'); } }
-            else if (type === 'change_account') {
-                title.textContent = '修改扣款帳戶';
-                document.getElementById('input-default-container').classList.add('hidden');
-                document.getElementById('input-account-container').classList.remove('hidden');
-                document.getElementById('input-account-select').innerHTML = accounts.map(a => `<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('');
-                const log = dailyLogs.find(l => l.id === id);
-                if(log && log.card) document.getElementById('input-account-select').value = log.card;
-            }
-            else if(type === 'investment_add') {
-                title.textContent = '新增投資紀錄';
-                document.getElementById('input-note-container').classList.remove('hidden');
-                document.getElementById('input-note').placeholder = '標的名稱 (如: 0050)';
-                document.getElementById('input-account-container').classList.remove('hidden');
-                document.getElementById('input-account-select').innerHTML = accounts.map(a => `<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('');
-            }
-        };
-
-        window.submitInputModal = () => {
-            if (window.inputType === 'change_account') {
-                const newCard = document.getElementById('input-account-select').value;
-                const idx = dailyLogs.findIndex(l => l.id === window.inputId);
-                if (idx !== -1) {
-                    const log = dailyLogs[idx];
-                    if (log.card !== newCard) {
-                        const oldIdx = accounts.findIndex(a => a.name === log.card);
-                        if (oldIdx !== -1) accounts[oldIdx].balance += log.amount;
-                        const newIdx = accounts.findIndex(a => a.name === newCard);
-                        if (newIdx !== -1) accounts[newIdx].balance -= log.amount;
-                        log.card = newCard;
-                    }
-                }
-            } else {
-                const v = parseInt(document.getElementById('input-value').value)||0;
-                const n = document.getElementById('input-note').value;
-                if(window.inputType === 'income') monthlyIncome[window.inputId] = v;
-                if(window.inputType === 'fixed_add' && n) fixedExpenses.push({id:Date.now(), name:n, amount:v, note:document.getElementById('input-fixed-acc-select').value});
-                if(window.inputType === 'fixed_edit') { const f = fixedExpenses.find(f=>f.id===window.inputId); if(f) { f.amount=v; f.note=document.getElementById('input-fixed-acc-select').value; } }
-                if(window.inputType === 'balance') { if(window.inputId === -1 && n) accounts.push({name:n, balance:v}); else accounts[window.inputId].balance = v; }
-                if(window.inputType === 'investment_add') {
-                    if(!n || !v) return showToast('請輸入資料', 'error');
-                    commitLog({ description: n, amount: v, category: '投資', card: document.getElementById('input-account-select').value, type: 'finance' });
-                    showToast('已新增', 'success');
-                }
-            }
-            saveData();
-            closeModal('input');
-        };
-
-        window.openModal = (id) => document.getElementById(`${id}-modal`).classList.remove('hidden');
-        window.closeModal = (id) => document.getElementById(`${id}-modal`).classList.add('hidden');
 
         // --- Render UI ---
         window.refreshUI = () => {
@@ -853,27 +760,9 @@
             const currCat = document.getElementById('log-category').value;
             changeLogCategory(currCat);
         };
-
-        // --- Cal Utils & Nav ---
-        window.toggleCalendar = () => { const c = document.getElementById('calendar-wrapper'); c.classList.toggle('hidden'); if(!c.classList.contains('hidden')) renderCalendar(); };
-        window.prevMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()-1); renderCalendar(); };
-        window.nextMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()+1); renderCalendar(); };
-        window.selectDate = (d) => { currentDate = d; refreshUI(); window.toggleCalendar(); };
-        window.jumpToToday = () => { currentDate = getLocalDate(); currentViewMonth = new Date(); refreshUI(); };
-        window.removeFixed = async (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); saveData(); };
-        
-        window.switchTab = (t) => {
-            document.querySelectorAll('.tab-view').forEach(e=>e.classList.add('hidden'));
-            document.getElementById(`${t}-view`).classList.remove('hidden');
-            document.querySelectorAll('.nav-btn').forEach(e=>e.classList.remove('text-blue-600'));
-            const btn = document.getElementById(`nav-${t}`);
-            if(btn) btn.classList.add('text-blue-600');
-            refreshUI();
-        };
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
-    <!-- ... body content remains the same as previously fixed version ... -->
     <div id="toast" class="hidden fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white bg-black z-50"></div>
 
     <!-- Portfolio Manager Modal -->
@@ -951,7 +840,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.6</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.7</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1119,7 +1008,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.6</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.7</div>
         </div>
     </main>
 
