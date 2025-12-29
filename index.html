@@ -112,7 +112,6 @@
             const apiKeyInput = document.getElementById('setting-api-key');
             if (apiKeyInput) apiKeyInput.value = USER_API_KEY;
             
-            // Model Selector Init
             const modelSelect = document.getElementById('setting-model');
             if (modelSelect) {
                 const defaultModels = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'];
@@ -137,13 +136,154 @@
             refreshUI();
         };
 
-        // --- Core Calc ---
-        const calculateTDEE = (w, h, age, gender) => {
-            const s = gender === 'male' ? 5 : -161;
-            const bmr = (10 * w) + (6.25 * h) - (5 * age) + s;
-            const tdee = Math.round(bmr * 1.375); 
-            return { tdee, target: tdee - 500 };
+        // --- Helper Functions (Hoisted) ---
+        
+        // 1. Toggle Manual Input
+        window.toggleManualInput = (mode) => {
+            const block = document.getElementById('manual-nutrition-block');
+            if(!block) return;
+            if (mode === 'none') { block.classList.add('hidden'); } 
+            else {
+                block.classList.remove('hidden');
+                const kcalC = document.getElementById('manual-kcal-container');
+                const protC = document.getElementById('manual-protein-container');
+                if (mode === 'food') {
+                    document.getElementById('manual-hint-text').textContent = '✍️ 手動輸入營養 (若填寫將不使用AI估算)';
+                    document.getElementById('manual-kcal-label').textContent = '🔥';
+                    kcalC.classList.remove('w-full'); kcalC.classList.add('flex-1');
+                    protC.classList.remove('hidden');
+                } else {
+                    document.getElementById('manual-hint-text').textContent = '✍️ 手動輸入消耗';
+                    document.getElementById('manual-kcal-label').textContent = '🏃';
+                    kcalC.classList.remove('flex-1'); kcalC.classList.add('w-full');
+                    protC.classList.add('hidden');
+                }
+            }
         };
+
+        // 2. Change Log Category
+        window.changeLogCategory = (v) => {
+            const cardSel = document.getElementById('log-card'); 
+            const amtInput = document.getElementById('log-amount'); 
+            const btn = document.getElementById('unified-log-btn');
+            
+            if(!cardSel || !amtInput || !btn) return;
+
+            if (v === '運動') { 
+                cardSel.disabled = true; 
+                cardSel.innerHTML = '<option>無</option>';
+                amtInput.placeholder = '無'; 
+                amtInput.value = 0; 
+                amtInput.disabled = true; 
+                btn.textContent = '🔥 記錄'; 
+                
+                toggleManualInput('exercise');
+            } else { 
+                cardSel.disabled = false; 
+                amtInput.placeholder = '$'; 
+                amtInput.disabled = false; 
+                btn.textContent = '💰 記錄';
+                
+                if(v === '食物' || v === '餐費') toggleManualInput('food');
+                else toggleManualInput('none');
+                
+                let targetSelectAccount = '';
+                let budgetInfo = '';
+                const fixedItem = fixedExpenses.find(f => f.name === v);
+
+                if (v === '娛樂' || v === '投資') {
+                    const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
+                    const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
+                    const disposable = incomeTotal - fixedTotal;
+                    const ratio = v === '娛樂' ? (userProfile.entRatio || 20) : (100 - (userProfile.entRatio || 20));
+                    const totalBudget = Math.floor(disposable * (ratio / 100));
+                    
+                    const monthStart = currentDate.substring(0, 7);
+                    const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
+                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
+                    const remaining = totalBudget - spent;
+                    
+                    budgetInfo = ` (預算剩: $${remaining})`;
+                }
+                else if (fixedItem) {
+                    const monthStart = currentDate.substring(0, 7);
+                    const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
+                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
+                    const remaining = fixedItem.amount - spent;
+                    budgetInfo = ` (預算剩: $${remaining})`;
+                    targetSelectAccount = fixedItem.note; 
+                }
+
+                const optionsHtml = accounts.map(a => {
+                    let label = `${a.name} ($${a.balance})`; 
+                    if (fixedItem && a.name === targetSelectAccount) {
+                        label = `✔ ${a.name}${budgetInfo}`; 
+                    }
+                    const isSelected = (a.name === targetSelectAccount);
+                    return `<option value="${a.name}" ${isSelected ? 'selected' : ''}>${label}</option>`;
+                }).join('') + '<option value="custom">➕ 自訂...</option>';
+
+                cardSel.innerHTML = optionsHtml;
+                
+                if (v === '娛樂' || v === '投資') {
+                    Array.from(cardSel.options).forEach(opt => {
+                        if (opt.value !== 'custom') {
+                            opt.text = `${opt.text.split('(')[0]} ${budgetInfo}`;
+                        }
+                    });
+                }
+            }
+        };
+
+        // 3. Update Category Dropdown
+        const updateCategoryDropdown = () => {
+            const select = document.getElementById('log-category');
+            if(!select) return;
+            const currentVal = select.value;
+            let fixedNames = fixedExpenses.map(f => f.name);
+            fixedNames = fixedNames.filter(n => n !== '食物');
+            const hasFood = fixedExpenses.some(f => f.name === '食物');
+            let finalCats = [];
+            if (hasFood) finalCats.push('食物');
+            finalCats.push('娛樂', '投資', '運動');
+            finalCats = [...finalCats, ...fixedNames];
+            finalCats = [...new Set(finalCats)];
+
+            select.innerHTML = finalCats.map(c => {
+                const icon = categoryIcons[c] || '📝'; 
+                return `<option value="${c}">${icon} ${c}</option>`;
+            }).join('');
+            
+            if(finalCats.includes(currentVal)) select.value = currentVal;
+            else if(finalCats.length > 0) select.value = finalCats[0];
+        };
+
+        // 4. Render Calendar (Was missing in previous version)
+        const renderCalendar = () => {
+            const calContainer = document.getElementById('calendar-grid');
+            if(!calContainer) return;
+            const monthLabel = document.getElementById('current-month-label');
+            const y = currentViewMonth.getFullYear();
+            const m = currentViewMonth.getMonth();
+            monthLabel.textContent = `${y}年 ${m+1}月`;
+
+            const firstDay = new Date(y, m, 1).getDay();
+            const daysInMonth = new Date(y, m + 1, 0).getDate();
+            
+            let html = '';
+            for(let i=0; i<firstDay; i++) html += `<div></div>`;
+            
+            for(let d=1; d<=daysInMonth; d++) {
+                const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const hasLog = dailyLogs.some(l => l.dateStr === dateStr);
+                const isSelected = dateStr === currentDate;
+                html += `<div onclick="selectDate('${dateStr}')" class="h-8 flex flex-col items-center justify-center rounded-full cursor-pointer relative ${isSelected ? 'bg-blue-600 text-white' : 'hover:bg-gray-100'}"><span class="text-xs font-bold">${d}</span>${hasLog ? `<span class="w-1 h-1 rounded-full ${isSelected ? 'bg-white' : 'bg-green-500'} absolute bottom-1"></span>` : ''}</div>`;
+            }
+            calContainer.innerHTML = html;
+        };
+
+        // --- Core Calc ---
+        const calculateTDEE = (w, h, age, gender) => { /* ... */ const s = gender === 'male' ? 5 : -161; const bmr = (10 * w) + (6.25 * h) - (5 * age) + s; const tdee = Math.round(bmr * 1.375); return { tdee, target: tdee - 500 }; };
 
         window.updateInvFromEnt = (val) => { let ent = parseInt(val) || 0; if (ent > 100) ent = 100; if (ent < 0) ent = 0; document.getElementById('ratio-inv').value = 100 - ent; };
         window.updateEntFromInv = (val) => { let inv = parseInt(val) || 0; if (inv > 100) inv = 100; if (inv < 0) inv = 0; document.getElementById('ratio-ent').value = 100 - inv; };
@@ -197,10 +337,7 @@
             try {
                 const data = JSON.parse(jsonStr);
                 if (Array.isArray(data)) {
-                    if(confirm("⚠️ 偵測到純記帳紀錄。\n是否匯入並覆蓋現有紀錄？")) {
-                        DB.set('logs', data);
-                        location.reload();
-                    }
+                    if(confirm("⚠️ 偵測到純記帳紀錄。\n是否匯入並覆蓋現有紀錄？")) { DB.set('logs', data); location.reload(); }
                     return;
                 }
                 if (confirm("⚠️ 這將覆蓋所有設定與紀錄！\n確定要匯入嗎？")) {
@@ -300,7 +437,6 @@
                     const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
                     const invContext = investments.map(i => `${i.symbol}: ${i.note}`).join(", ");
                     
-                    // Portfolio summary for AI
                     const portfolio = {};
                     dailyLogs.filter(l => l.category === '投資').forEach(l => { portfolio[l.description.trim()] = (portfolio[l.description.trim()] || 0) + (l.amount || 0); });
                     const portStr = Object.entries(portfolio).map(([k,v]) => `${k}:$${v}`).join(", ");
@@ -310,12 +446,12 @@
 
                 const res = await callAI(context + " 用戶問:" + msg);
                 document.getElementById(loadingId).remove();
-                const displayNum = typeof res === 'object' ? `AI Error: ${res.error}` : res; // Show error text
+                const displayNum = typeof res === 'object' ? `AI Error: ${res.error}` : res; 
                 chatBox.innerHTML += `<div class="flex justify-start mb-4"><div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center mr-2 text-lg flex-shrink-0">🤖</div><div class="bg-white text-gray-800 py-3 px-4 rounded-2xl rounded-tl-none text-sm shadow-sm border border-gray-100 max-w-[90%]">${parseMarkdown(displayNum)}</div></div>`;
                 chatBox.scrollTop = chatBox.scrollHeight;
             } catch(e) { 
                 document.getElementById(loadingId).remove();
-                showToast(`AI 失敗: ${e.message}`, "error"); // Show toast
+                showToast(`AI 失敗: ${e.message}`, "error"); 
                 chatBox.innerHTML += `<div class="flex justify-start mb-4"><div class="text-red-500 text-xs">發送失敗: ${e.message}</div></div>`;
             }
         };
@@ -370,7 +506,6 @@
                 }
             } catch(e) { 
                 showToast(`AI 錯誤: ${e.message}`, 'error');
-                // Fallback to manual entry if AI fails
                 if(category === '食物' || category === '餐費') { window.pendingLog = { description, amount, category, card, type: 'finance_health' }; setupVerifyModal('food', {kcal:0, protein:0}); }
                 else if(category === '運動') { window.pendingLog = { description, amount: 0, category, card: '', type: 'exercise' }; setupVerifyModal('exercise', {burned:0}); }
                 else { commitLog({ description, amount, category, card, type: 'finance' }); resetLogForm(); }
@@ -403,7 +538,7 @@
         const commitLog = (d) => {
             const logData = { id: Date.now().toString(), timestamp: new Date().toISOString(), dateStr: currentDate, ...d };
             dailyLogs.unshift(logData);
-            if(d.amount !== 0 && d.card) { // Allow negative amount for refunds/selling
+            if(d.amount !== 0 && d.card) { 
                 const idx = accounts.findIndex(a=>a.name===d.card);
                 if(idx!==-1) accounts[idx].balance -= d.amount;
             }
@@ -417,7 +552,7 @@
             const log = dailyLogs[idx];
             if (log.amount !== 0 && log.card) {
                 const accIdx = accounts.findIndex(a => a.name === log.card);
-                if(accIdx !== -1) accounts[accIdx].balance += log.amount; // Refund
+                if(accIdx !== -1) accounts[accIdx].balance += log.amount; 
             }
             dailyLogs.splice(idx, 1);
             saveData();
@@ -453,26 +588,14 @@
         window.submitPortfolioUpdate = () => {
             const target = parseInt(document.getElementById('port-target').value) || 0;
             const account = document.getElementById('port-account-select').value;
-            
             const diff = target - currentEditingAmount;
             
             if (diff === 0) { closeModal('portfolio-action'); return; }
             
-            // Logic: User wants total to be X. Current is Y. Diff = X - Y.
-            // If Diff > 0: We bought more. Expense.
-            // If Diff < 0: We sold/reduced. Income (Negative Expense).
-            
-            // We use the SYMBOL NAME as description so it groups correctly without "Rebalancing" label
             const desc = currentEditingSymbol; 
             const card = account === 'none' ? null : account;
             
-            commitLog({ 
-                description: desc, 
-                amount: diff, 
-                category: '投資', 
-                card: card, 
-                type: 'finance' 
-            });
+            commitLog({ description: desc, amount: diff, category: '投資', card: card, type: 'finance' });
             
             showToast('持倉已更新', 'success');
             closeModal('portfolio-action');
@@ -481,13 +604,8 @@
         window.deletePortfolioSymbol = () => {
             if(!confirm(`確定要刪除「${currentEditingSymbol}」的所有歷史紀錄嗎？\n\n(注意：若當初有綁定扣款帳戶，金額將會退回)`)) return;
             
-            // Filter logs that match the symbol name exactly
             const logsToRemove = dailyLogs.filter(l => l.category === '投資' && l.description.trim() === currentEditingSymbol);
-            
-            if (logsToRemove.length === 0) {
-                showToast("找不到符合的紀錄", "error");
-                return;
-            }
+            if (logsToRemove.length === 0) { showToast("找不到紀錄", "error"); return; }
 
             logsToRemove.forEach(log => {
                 if (log.amount !== 0 && log.card) {
@@ -496,9 +614,7 @@
                 }
             });
             
-            // Keep logs that DO NOT match
             dailyLogs = dailyLogs.filter(l => !(l.category === '投資' && l.description.trim() === currentEditingSymbol));
-            
             saveData();
             showToast('已清空此標的', 'success');
             closeModal('portfolio-action');
@@ -543,27 +659,6 @@
         window.openCameraModal = () => document.getElementById('camera-choice-modal').classList.remove('hidden');
         window.triggerCamera = () => document.getElementById('input-camera').click();
         window.triggerGallery = () => document.getElementById('input-gallery').click();
-        
-        window.toggleManualInput = (mode) => {
-            const block = document.getElementById('manual-nutrition-block');
-            if (mode === 'none') { block.classList.add('hidden'); } 
-            else {
-                block.classList.remove('hidden');
-                const kcalC = document.getElementById('manual-kcal-container');
-                const protC = document.getElementById('manual-protein-container');
-                if (mode === 'food') {
-                    document.getElementById('manual-hint-text').textContent = '✍️ 手動輸入營養 (若填寫將不使用AI估算)';
-                    document.getElementById('manual-kcal-label').textContent = '🔥';
-                    kcalC.classList.remove('w-full'); kcalC.classList.add('flex-1');
-                    protC.classList.remove('hidden');
-                } else {
-                    document.getElementById('manual-hint-text').textContent = '✍️ 手動輸入消耗';
-                    document.getElementById('manual-kcal-label').textContent = '🏃';
-                    kcalC.classList.remove('flex-1'); kcalC.classList.add('w-full');
-                    protC.classList.add('hidden');
-                }
-            }
-        }
 
         window.addInvestment = async () => {
             const s = document.getElementById('inv-symbol').value;
@@ -664,7 +759,7 @@
         window.openModal = (id) => document.getElementById(`${id}-modal`).classList.remove('hidden');
         window.closeModal = (id) => document.getElementById(`${id}-modal`).classList.add('hidden');
 
-        // --- Render ---
+        // --- Render UI ---
         window.refreshUI = () => {
             const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
             const monthStart = currentDate.substring(0, 7);
@@ -681,8 +776,9 @@
             setText('dash-remain', userProfile.targetKcal + burned - kcalIn);
             setText('current-date-display', currentDate);
 
-            // Lists
             updateCategoryDropdown();
+
+            // Log List
             setHTML('log-list', todayLogs.length ? todayLogs.map(l=>`
                 <div class="flex justify-between p-3 border-b border-gray-100 text-sm">
                     <div class="flex items-center gap-2"><span class="text-lg">${categoryIcons[l.category]||'📝'}</span><div><div class="font-bold text-gray-700">${l.description}</div><div class="text-[10px] text-gray-400">${l.category} · ${l.card?`<span onclick="openInputModal('change_account','${l.id}')" class="text-blue-500 cursor-pointer underline decoration-dotted">${l.card}</span>`:'無'}</div></div></div>
@@ -753,14 +849,14 @@
             renderCalendar();
         };
 
-        // --- Cal Utils ---
+        // --- Cal Utils & Nav ---
         window.toggleCalendar = () => { const c = document.getElementById('calendar-wrapper'); c.classList.toggle('hidden'); if(!c.classList.contains('hidden')) renderCalendar(); };
         window.prevMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()-1); renderCalendar(); };
         window.nextMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()+1); renderCalendar(); };
         window.selectDate = (d) => { currentDate = d; refreshUI(); window.toggleCalendar(); };
         window.jumpToToday = () => { currentDate = getLocalDate(); currentViewMonth = new Date(); refreshUI(); };
         window.removeFixed = async (id) => { fixedExpenses = fixedExpenses.filter(f=>f.id!==id); saveData(); };
-
+        
         window.switchTab = (t) => {
             document.querySelectorAll('.tab-view').forEach(e=>e.classList.add('hidden'));
             document.getElementById(`${t}-view`).classList.remove('hidden');
@@ -769,102 +865,10 @@
             if(btn) btn.classList.add('text-blue-600');
             refreshUI();
         };
-
-        const updateCategoryDropdown = () => {
-            const select = document.getElementById('log-category');
-            if(!select) return;
-            const currentVal = select.value;
-            let fixedNames = fixedExpenses.map(f => f.name);
-            fixedNames = fixedNames.filter(n => n !== '食物');
-            const hasFood = fixedExpenses.some(f => f.name === '食物');
-            let finalCats = [];
-            if (hasFood) finalCats.push('食物');
-            finalCats.push('娛樂', '投資', '運動');
-            finalCats = [...finalCats, ...fixedNames];
-            finalCats = [...new Set(finalCats)];
-
-            select.innerHTML = finalCats.map(c => {
-                const icon = categoryIcons[c] || '📝'; 
-                return `<option value="${c}">${icon} ${c}</option>`;
-            }).join('');
-            
-            if(finalCats.includes(currentVal)) select.value = currentVal;
-            else if(finalCats.length > 0) select.value = finalCats[0];
-        };
-
-        window.changeLogCategory = (v) => {
-            const cardSel = document.getElementById('log-card'); 
-            const amtInput = document.getElementById('log-amount'); 
-            const btn = document.getElementById('unified-log-btn');
-            
-            if (v === '運動') { 
-                cardSel.disabled = true; 
-                cardSel.innerHTML = '<option>無</option>';
-                amtInput.placeholder = '無'; 
-                amtInput.value = 0; 
-                amtInput.disabled = true; 
-                btn.textContent = '🔥 記錄'; 
-                
-                toggleManualInput('exercise');
-            } else { 
-                cardSel.disabled = false; 
-                amtInput.placeholder = '$'; 
-                amtInput.disabled = false; 
-                btn.textContent = '💰 記錄';
-                
-                if(v === '食物' || v === '餐費') toggleManualInput('food');
-                else toggleManualInput('none');
-                
-                let targetSelectAccount = '';
-                let budgetInfo = '';
-                const fixedItem = fixedExpenses.find(f => f.name === v);
-
-                if (v === '娛樂' || v === '投資') {
-                    const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
-                    const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
-                    const disposable = incomeTotal - fixedTotal;
-                    const ratio = v === '娛樂' ? (userProfile.entRatio || 20) : (100 - (userProfile.entRatio || 20));
-                    const totalBudget = Math.floor(disposable * (ratio / 100));
-                    
-                    const monthStart = currentDate.substring(0, 7);
-                    const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
-                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
-                    const remaining = totalBudget - spent;
-                    
-                    budgetInfo = ` (預算剩: $${remaining})`;
-                }
-                else if (fixedItem) {
-                    const monthStart = currentDate.substring(0, 7);
-                    const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
-                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
-                    const remaining = fixedItem.amount - spent;
-                    budgetInfo = ` (預算剩: $${remaining})`;
-                    targetSelectAccount = fixedItem.note; 
-                }
-
-                const optionsHtml = accounts.map(a => {
-                    let label = `${a.name} ($${a.balance})`; 
-                    if (fixedItem && a.name === targetSelectAccount) {
-                        label = `✔ ${a.name}${budgetInfo}`; 
-                    }
-                    const isSelected = (a.name === targetSelectAccount);
-                    return `<option value="${a.name}" ${isSelected ? 'selected' : ''}>${label}</option>`;
-                }).join('') + '<option value="custom">➕ 自訂...</option>';
-
-                cardSel.innerHTML = optionsHtml;
-                
-                if (v === '娛樂' || v === '投資') {
-                    Array.from(cardSel.options).forEach(opt => {
-                        if (opt.value !== 'custom') {
-                            opt.text = `${opt.text.split('(')[0]} ${budgetInfo}`;
-                        }
-                    });
-                }
-            }
-        };
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
+    <!-- ... body content remains the same as previously fixed version ... -->
     <div id="toast" class="hidden fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white bg-black z-50"></div>
 
     <!-- Portfolio Manager Modal -->
