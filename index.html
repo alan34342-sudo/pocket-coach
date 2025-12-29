@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.10</title>
+    <title>Pocket Coach v18.12</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -30,7 +30,6 @@
         const setHTML = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
         const setValue = (id, val) => { const el = document.getElementById(id); if(el) el.value = val; };
         
-        // FIXED: Restore showToast function
         window.showToast = (m,t) => { 
             const el=document.getElementById('toast'); 
             if(!el) return;
@@ -68,6 +67,8 @@
         // Portfolio Management Vars
         let currentEditingSymbol = '';
         let currentEditingAmount = 0;
+        let currentInputMode = ''; 
+        let currentInputId = null;
 
         // Data Models
         let accounts = [];
@@ -147,8 +148,157 @@
             refreshUI();
         };
 
-        // --- Helper Functions (Hoisted) ---
+        // --- Helper Functions ---
         
+        window.closeModal = (id) => {
+            document.getElementById(`${id}-modal`).classList.add('hidden');
+        };
+
+        window.toggleCalendar = () => {
+            document.getElementById('calendar-wrapper').classList.toggle('hidden');
+        };
+        window.prevMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()-1); renderCalendar(); };
+        window.nextMonth = () => { currentViewMonth.setMonth(currentViewMonth.getMonth()+1); renderCalendar(); };
+        window.jumpToToday = () => { currentViewMonth = new Date(); renderCalendar(); };
+        window.selectDate = (d) => { currentDate = d; renderCalendar(); refreshUI(); };
+
+        window.openInputModal = (mode, id=null) => {
+            currentInputMode = mode;
+            currentInputId = id;
+            const modal = document.getElementById('input-modal');
+            const title = document.getElementById('input-modal-title');
+            const noteC = document.getElementById('input-note-container');
+            const valC = document.getElementById('input-default-container');
+            const accC = document.getElementById('input-account-container');
+            const fixC = document.getElementById('input-fixed-acc-container');
+            const valInput = document.getElementById('input-value');
+            const noteInput = document.getElementById('input-note');
+            const lbl = document.getElementById('input-label');
+
+            // Reset UI
+            modal.classList.remove('hidden');
+            noteC.classList.add('hidden');
+            valC.classList.remove('hidden');
+            accC.classList.add('hidden');
+            fixC.classList.add('hidden');
+            valInput.value = '';
+            noteInput.value = '';
+            valInput.placeholder = '';
+            lbl.textContent = '數值';
+
+            if(mode === 'fixed_add') {
+                title.textContent = '新增固定支出';
+                noteC.classList.remove('hidden');
+                fixC.classList.remove('hidden');
+                const sel = document.getElementById('input-fixed-acc-select');
+                sel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
+            }
+            else if(mode === 'fixed_edit') {
+                title.textContent = '編輯金額';
+                const item = fixedExpenses.find(f=>f.id===id);
+                if(item) valInput.value = item.amount;
+            }
+            else if(mode === 'balance') {
+                title.textContent = id === -1 ? '新增帳戶' : '調整餘額';
+                if(id === -1) {
+                    noteC.classList.remove('hidden'); 
+                    valInput.placeholder = '初始餘額';
+                } else {
+                    valInput.value = accounts[id].balance;
+                }
+            }
+            else if(mode === 'income') {
+                title.textContent = '設定收入';
+                valInput.value = monthlyIncome[id]; 
+            }
+            else if(mode === 'investment_add') {
+                 title.textContent = '新增持倉 (買入)';
+                 noteC.classList.remove('hidden');
+                 noteInput.placeholder = '代號 (e.g., 2330)';
+                 accC.classList.remove('hidden');
+                 lbl.textContent = '總投入金額';
+                 const sel = document.getElementById('input-account-select');
+                 sel.innerHTML = `<option value="none">不扣款 (純記帳)</option>` + accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
+            }
+            else if(mode === 'change_account') {
+                title.textContent = '變更扣款帳戶';
+                valC.classList.add('hidden'); 
+                accC.classList.remove('hidden');
+                const sel = document.getElementById('input-account-select');
+                sel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
+            }
+        };
+
+        window.submitInputModal = () => {
+            const val = parseInt(document.getElementById('input-value').value) || 0;
+            const note = document.getElementById('input-note').value;
+
+            if(currentInputMode === 'fixed_add') {
+                 const acc = document.getElementById('input-fixed-acc-select').value;
+                 if(!note) return showToast('請輸入名稱','error');
+                 fixedExpenses.push({id: Date.now(), name: note, amount: val, note: acc});
+            }
+            else if(currentInputMode === 'fixed_edit') {
+                const idx = fixedExpenses.findIndex(f=>f.id===currentInputId);
+                if(idx!==-1) fixedExpenses[idx].amount = val;
+            }
+            else if(currentInputMode === 'balance') {
+                if(currentInputId === -1) {
+                    if(!note) return showToast('請輸入帳戶名稱','error');
+                    accounts.push({name: note, balance: val});
+                } else {
+                    accounts[currentInputId].balance = val;
+                }
+            }
+            else if(currentInputMode === 'income') {
+                monthlyIncome[currentInputId] = val;
+            }
+            else if(currentInputMode === 'investment_add') {
+                if(!note) return showToast('請輸入代號','error');
+                const acc = document.getElementById('input-account-select').value;
+                const card = acc === 'none' ? null : acc;
+                commitLog({ description: note, amount: val, category: '投資', card: card, type: 'finance' });
+            }
+            else if(currentInputMode === 'change_account') {
+                const acc = document.getElementById('input-account-select').value;
+                const idx = dailyLogs.findIndex(l=>l.id===currentInputId);
+                if(idx!==-1) dailyLogs[idx].card = acc;
+            }
+
+            saveData();
+            closeModal('input');
+            refreshUI();
+            showToast('更新成功', 'success');
+        };
+
+        window.addInvestment = async () => {
+            const s = document.getElementById('inv-symbol').value;
+            const n = document.getElementById('inv-note').value;
+            if(!s || !n) return showToast("請輸入完整資料", "error");
+
+            const btn = document.getElementById('inv-add-btn');
+            const originalText = btn.textContent;
+            btn.textContent = "AI 分析中..."; btn.disabled = true;
+
+            let feedback = "";
+            try {
+                feedback = await callAI(`分析投資觀點: ${s} - ${n}。請給予簡短風險評估與建議 (50字內)。`);
+                if(feedback.error) feedback = "AI 無法回應";
+            } catch(e) { feedback = "暫無分析"; }
+
+            investments.unshift({ id: Date.now().toString(), date: currentDate, symbol: s, note: n, feedback: feedback });
+            saveData();
+            document.getElementById('inv-symbol').value = '';
+            document.getElementById('inv-note').value = '';
+            btn.textContent = originalText; btn.disabled = false;
+        };
+
+        window.removeInvestment = (id) => {
+            if(!confirm('刪除此筆記？')) return;
+            investments = investments.filter(i=>i.id!==id);
+            saveData();
+        };
+
         window.toggleManualInput = (mode) => {
             const block = document.getElementById('manual-nutrition-block');
             if(!block) return;
@@ -484,9 +634,9 @@
             try {
                 if(category === '食物' || category === '餐費') {
                     if (manualKcal || manualProtein) {
-                         commitLog({ description, amount, category, card, type: 'finance_health', kcal: parseInt(manualKcal)||0, protein: parseInt(manualProtein)||0 });
-                         showToast('記帳成功', 'success');
-                         setTimeout(resetLogForm, 50); // Delay clear
+                          commitLog({ description, amount, category, card, type: 'finance_health', kcal: parseInt(manualKcal)||0, protein: parseInt(manualProtein)||0 });
+                          showToast('記帳成功', 'success');
+                          setTimeout(resetLogForm, 50); // Delay clear
                     } else {
                         const res = await callAI(`分析食物營養:${description}。請只回傳JSON格式: {"kcal": 數字, "protein": 數字}。`, selectedImageBase64);
                         if(res.error) throw new Error(res.error);
@@ -496,9 +646,9 @@
                 } 
                 else if (category === '運動') {
                     if (manualKcal) {
-                         commitLog({ description, amount: 0, category, card: '', type: 'exercise', burned: parseInt(manualKcal)||0 });
-                         showToast('紀錄成功', 'success');
-                         setTimeout(resetLogForm, 50);
+                          commitLog({ description, amount: 0, category, card: '', type: 'exercise', burned: parseInt(manualKcal)||0 });
+                          showToast('紀錄成功', 'success');
+                          setTimeout(resetLogForm, 50);
                     } else {
                         const res = await callAI(`分析運動消耗:${description}。使用者${userProfile.weight}公斤。預設30分。只回傳JSON: {"burned": 數字}。`);
                         if(res.error) throw new Error(res.error);
@@ -627,22 +777,31 @@
         };
 
         window.deletePortfolioSymbol = () => {
-            if(!confirm(`確定要刪除「${currentEditingSymbol}」的所有歷史紀錄嗎？\n\n(注意：若當初有綁定扣款帳戶，金額將會退回)`)) return;
-            
-            const logsToRemove = dailyLogs.filter(l => l.category === '投資' && l.description.trim() === currentEditingSymbol);
-            if (logsToRemove.length === 0) { showToast("找不到紀錄", "error"); return; }
+            try {
+                if(!confirm(`確定要刪除「${currentEditingSymbol}」的所有歷史紀錄嗎？\n\n(注意：若當初有綁定扣款帳戶，金額將會退回)`)) return;
+                
+                // FIXED: Robust string comparison
+                const targetSym = String(currentEditingSymbol).trim();
+                const logsToRemove = dailyLogs.filter(l => l.category === '投資' && String(l.description).trim() === targetSym);
+                
+                if (logsToRemove.length === 0) { showToast("找不到紀錄", "error"); return; }
 
-            logsToRemove.forEach(log => {
-                if (log.amount !== 0 && log.card) {
-                    const accIdx = accounts.findIndex(a => a.name === log.card);
-                    if(accIdx !== -1) accounts[accIdx].balance += log.amount;
-                }
-            });
-            
-            dailyLogs = dailyLogs.filter(l => !(l.category === '投資' && l.description.trim() === currentEditingSymbol));
-            saveData();
-            showToast('已清空此標的', 'success');
-            closeModal('portfolio-action');
+                logsToRemove.forEach(log => {
+                    if (log.amount !== 0 && log.card) {
+                        const accIdx = accounts.findIndex(a => a.name === log.card);
+                        if(accIdx !== -1) accounts[accIdx].balance += log.amount;
+                    }
+                });
+                
+                dailyLogs = dailyLogs.filter(l => !(l.category === '投資' && String(l.description).trim() === targetSym));
+                saveData();
+                showToast('已清空此標的', 'success');
+            } catch(e) {
+                console.error(e);
+                showToast("刪除失敗: " + e.message, "error");
+            } finally {
+                closeModal('portfolio-action');
+            }
         };
 
         // --- Other Utils ---
@@ -767,13 +926,13 @@
             // Portfolio
             const portfolio = {};
             dailyLogs.filter(l => l.category === '投資').forEach(l => {
-                const s = l.description.trim();
+                const s = String(l.description).trim(); // FIXED: Safe trim
                 if(s) portfolio[s] = (portfolio[s] || 0) + (l.amount || 0);
             });
             setHTML('portfolio-list', Object.keys(portfolio).length ? Object.entries(portfolio).map(([s,a]) => `
                 <div class="flex justify-between items-center p-2 border-b border-gray-100 last:border-0">
                     <div class="font-medium text-gray-700">${s}</div>
-                    <div class="flex items-center gap-2"><div class="font-bold text-gray-900">$${a.toLocaleString()}</div><button onclick="openPortfolioModal('${s}', ${a})" class="text-gray-400 hover:text-blue-600 p-1">⚙️</button></div>
+                    <div class="flex items-center gap-2"><div class="font-bold text-gray-900">$${a.toLocaleString()}</div><button onclick="openPortfolioModal('${s.replace(/'/g, "\\'")}', ${a})" class="text-gray-400 hover:text-blue-600 p-1">⚙️</button></div>
                 </div>`).join('') : '<div class="text-center text-gray-400 text-xs py-2">尚無持倉紀錄</div>');
 
             setHTML('inv-list', investments.map(i=>`<div class="bg-gray-50 p-3 rounded-xl mb-3 border border-gray-100"><div class="flex justify-between items-start mb-2"><div><span class="bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded text-xs">${i.symbol}</span><span class="text-xs text-gray-400 ml-2">${i.date}</span></div><button onclick="removeInvestment('${i.id}')" class="text-gray-400 hover:text-red-600 p-1">🗑️</button></div><div class="text-sm font-medium text-gray-800 mb-2">"${i.note}"</div><div class="text-xs bg-white p-2 rounded border border-indigo-100 text-gray-600 leading-relaxed">${parseMarkdown(i.feedback)}</div></div>`).join(''));
@@ -868,7 +1027,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.10</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.12</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1036,7 +1195,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.10</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.12</div>
         </div>
     </main>
 
