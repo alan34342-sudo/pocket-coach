@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.7</title>
+    <title>Pocket Coach v18.8</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -90,7 +90,7 @@
         // --- Init ---
         document.addEventListener('DOMContentLoaded', () => {
             loadData();
-            switchTab('dashboard'); // 這裡確保一打開就是駕駛艙
+            switchTab('dashboard');
         });
 
         const loadData = () => {
@@ -539,7 +539,12 @@
                 const idx = accounts.findIndex(a=>a.name===d.card);
                 if(idx!==-1) accounts[idx].balance -= d.amount;
             }
-            saveData();
+            try {
+                saveData();
+            } catch(e) {
+                console.error(e);
+                showToast("資料已儲存但畫面更新失敗", "error");
+            }
         };
 
         window.deleteLog = (id) => {
@@ -840,7 +845,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.7</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.8</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1008,7 +1013,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.7</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.8</div>
         </div>
     </main>
 
