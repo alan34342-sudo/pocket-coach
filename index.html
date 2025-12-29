@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.2 (Fixed)</title>
+    <title>Pocket Coach v18.3 (Balance UI)</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -774,12 +774,18 @@
                         ${isPaid ? '<span class="text-green-500 text-xs">🟢</span>' : '<span class="text-gray-200 text-xs">⚪</span>'}
                         <div>
                             <div class="font-medium">${f.name}</div>
-                            <div class="text-xs text-gray-400">剩餘: $${remaining} · 綁定: ${f.note}</div>
+                            <div class="text-xs text-gray-400">綁定: ${f.note}</div> 
                         </div>
                     </div>
-                    <div class="flex items-center">
-                        <span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded ${remaining < 0 ? 'text-red-500' : 'text-gray-800'}" onclick="openInputModal('fixed_edit', ${f.id})">$${f.amount}</span>
-                        <button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button>
+                    <div class="flex items-center gap-3">
+                        <div class="text-right">
+                             <div class="text-[10px] text-gray-400">剩餘</div>
+                             <div class="font-bold ${remaining < 0 ? 'text-red-500' : 'text-green-600'}">$${remaining}</div>
+                        </div>
+                        <div class="flex items-center">
+                            <span class="font-bold cursor-pointer hover:bg-gray-100 px-1 rounded text-gray-800 text-lg" onclick="openInputModal('fixed_edit', ${f.id})">$${f.amount}</span>
+                            <button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button>
+                        </div>
                     </div>
                 </div>`;
             }).join(''));
