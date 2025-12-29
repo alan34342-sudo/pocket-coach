@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.5 (Fixed)</title>
+    <title>Pocket Coach v18.6</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -112,6 +112,7 @@
             const apiKeyInput = document.getElementById('setting-api-key');
             if (apiKeyInput) apiKeyInput.value = USER_API_KEY;
             
+            // Model Selector Init
             const modelSelect = document.getElementById('setting-model');
             if (modelSelect) {
                 const defaultModels = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'];
@@ -228,7 +229,8 @@
                 if (v === '娛樂' || v === '投資') {
                     Array.from(cardSel.options).forEach(opt => {
                         if (opt.value !== 'custom') {
-                            opt.text = `${opt.text.split('(')[0]} ${budgetInfo}`;
+                            // Append budget info, keep account balance info
+                            opt.text = `${opt.text} ${budgetInfo}`;
                         }
                     });
                 }
@@ -258,7 +260,7 @@
             else if(finalCats.length > 0) select.value = finalCats[0];
         };
 
-        // 4. Render Calendar (Was missing in previous version)
+        // 4. Render Calendar
         const renderCalendar = () => {
             const calContainer = document.getElementById('calendar-grid');
             if(!calContainer) return;
@@ -778,11 +780,11 @@
 
             updateCategoryDropdown();
 
-            // Log List
+            // Log List (FIXED: Added Protein Display)
             setHTML('log-list', todayLogs.length ? todayLogs.map(l=>`
                 <div class="flex justify-between p-3 border-b border-gray-100 text-sm">
                     <div class="flex items-center gap-2"><span class="text-lg">${categoryIcons[l.category]||'📝'}</span><div><div class="font-bold text-gray-700">${l.description}</div><div class="text-[10px] text-gray-400">${l.category} · ${l.card?`<span onclick="openInputModal('change_account','${l.id}')" class="text-blue-500 cursor-pointer underline decoration-dotted">${l.card}</span>`:'無'}</div></div></div>
-                    <div class="text-right"><div><span class="font-bold">-$${l.amount}</span> <button onclick="deleteLog('${l.id}')" class="text-gray-300 hover:text-red-500 px-1">×</button></div><div class="text-[10px] text-gray-400">${l.kcal?`攝${l.kcal}`:''} ${l.burned?`消${l.burned}`:''}</div></div>
+                    <div class="text-right"><div><span class="font-bold">-$${l.amount}</span> <button onclick="deleteLog('${l.id}')" class="text-gray-300 hover:text-red-500 px-1">×</button></div><div class="text-[10px] text-gray-400">${l.kcal?`🔥${l.kcal} ` : ''}${l.protein?`🥚${l.protein} ` : ''}${l.burned?`🏃${l.burned}` : ''}</div></div>
                 </div>`).join('') : '<div class="text-center text-gray-400 py-4">本日無紀錄</div>');
 
             // Fixed Expenses & Budgets
@@ -791,7 +793,7 @@
                 const used = monthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
                 const rem = f.amount - used;
                 fixedRemTotal += rem;
-                return `<div class="flex justify-between p-2 text-sm border-b items-center"><div class="flex items-center gap-2">${used>0?'<span class="text-green-500 text-xs">🟢</span>':'<span class="text-gray-200 text-xs">⚪</span>'}<div><div class="font-medium">${f.name}</div><div class="text-xs text-gray-400">剩: $${rem}</div></div></div><div class="flex items-center"><span class="font-bold px-1 rounded ${rem<0?'text-red-500':'text-gray-800'}" onclick="openInputModal('fixed_edit',${f.id})">$${f.amount}</span><button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button></div></div>`;
+                return `<div class="flex justify-between p-2 text-sm border-b items-center"><div class="flex items-center gap-2">${used>0?'<span class="text-green-500 text-xs">🟢</span>':'<span class="text-gray-200 text-xs">⚪</span>'}<div><div class="font-medium">${f.name}</div><div class="text-xs text-gray-400">剩: $${rem} · 綁定: ${f.note}</div></div></div><div class="flex items-center"><span class="font-bold px-1 rounded ${rem<0?'text-red-500':'text-gray-800'}" onclick="openInputModal('fixed_edit',${f.id})">$${f.amount}</span><button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button></div></div>`;
             }).join(''));
             if(document.getElementById('fixed-total-remaining')) {
                 const el = document.getElementById('fixed-total-remaining');
@@ -847,6 +849,9 @@
             setValue('ratio-ent', userProfile.entRatio);
             setValue('ratio-inv', 100 - userProfile.entRatio);
             renderCalendar();
+            
+            const currCat = document.getElementById('log-category').value;
+            changeLogCategory(currCat);
         };
 
         // --- Cal Utils & Nav ---
@@ -946,7 +951,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.5</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.6</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1114,7 +1119,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.5</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.6</div>
         </div>
     </main>
 
