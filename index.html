@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.12</title>
+    <title>Pocket Coach v18.19</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -23,6 +23,9 @@
         .ai-content p { margin-bottom: 0.5em; }
         .safe-area-pb { padding-bottom: env(safe-area-inset-bottom); }
         .hidden-input { display: none; }
+        .shield-green { color: #10b981; }
+        .shield-yellow { color: #f59e0b; }
+        .shield-red { color: #ef4444; }
     </style>
     <script>
         // --- UI Helpers ---
@@ -63,6 +66,7 @@
         let currentViewMonth = new Date(); 
         let selectedImageBase64 = null; 
         let window_pendingLog = {};
+        let uploadContext = 'log'; // 'log' or 'policy'
         
         // Portfolio Management Vars
         let currentEditingSymbol = '';
@@ -70,11 +74,16 @@
         let currentInputMode = ''; 
         let currentInputId = null;
 
+        // Chat Memory
+        let chatSessionMemory = { health: [], finance: [], insurance: [] };
+
         // Data Models
         let accounts = [];
         let monthlyIncome = { salary: 0, bonus: 0, overtime: 0, oncall: 0 };
         let fixedExpenses = [];
         let investments = []; 
+        let insurancePolicies = []; 
+        let insuranceNotes = [];    
         let dailyLogs = [];
         let userProfile = { height: 172, weight: 69, age: 30, gender: 'male', tdee: 2000, targetKcal: 1500, entRatio: 20 };
 
@@ -118,6 +127,8 @@
             const savedFix = DB.get('fixed', null);
             fixedExpenses = savedFix ? savedFix : defaultFixedList;
             investments = DB.get('investments', []);
+            insurancePolicies = DB.get('insurance_policies', []); 
+            insuranceNotes = DB.get('insurance_notes', []);       
             dailyLogs = DB.get('logs', []);
 
             const apiKeyInput = document.getElementById('setting-api-key');
@@ -144,6 +155,8 @@
             DB.set('fixed', fixedExpenses);
             DB.set('profile', userProfile);
             DB.set('investments', investments);
+            DB.set('insurance_policies', insurancePolicies); 
+            DB.set('insurance_notes', insuranceNotes);       
             DB.set('logs', dailyLogs);
             refreshUI();
         };
@@ -227,6 +240,13 @@
                 const sel = document.getElementById('input-account-select');
                 sel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
             }
+            else if(mode === 'insurance_add') {
+                title.textContent = '新增保單';
+                noteC.classList.remove('hidden');
+                noteInput.placeholder = '保單名稱';
+                valC.classList.remove('hidden');
+                lbl.textContent = '年繳金額';
+            }
         };
 
         window.submitInputModal = () => {
@@ -264,6 +284,10 @@
                 const idx = dailyLogs.findIndex(l=>l.id===currentInputId);
                 if(idx!==-1) dailyLogs[idx].card = acc;
             }
+            else if(currentInputMode === 'insurance_add') {
+                if(!note) return showToast('請輸入保單名稱','error');
+                insurancePolicies.push({ id: Date.now(), name: note, amount: val, date: currentDate, features: "手動輸入" });
+            }
 
             saveData();
             closeModal('input');
@@ -291,6 +315,69 @@
             document.getElementById('inv-symbol').value = '';
             document.getElementById('inv-note').value = '';
             btn.textContent = originalText; btn.disabled = false;
+        };
+
+        // New Insurance Functions
+        window.addInsuranceNote = async () => {
+            const n = document.getElementById('ins-note-input').value;
+            if(!n) return showToast("請輸入筆記", "error");
+
+            const btn = document.getElementById('ins-add-btn');
+            const originalText = btn.textContent;
+            btn.textContent = "AI 分析中..."; btn.disabled = true;
+
+            let feedback = "";
+            try {
+                feedback = await callAI(`角色:專業保險顧問。分析用戶保險筆記: "${n}"。請給予簡短、專業的建議或盲點提醒 (50字內)。`);
+                if(feedback.error) feedback = "AI 無法回應";
+            } catch(e) { feedback = "暫無分析"; }
+
+            insuranceNotes.unshift({ id: Date.now().toString(), date: currentDate, note: n, feedback: feedback });
+            saveData();
+            document.getElementById('ins-note-input').value = '';
+            btn.textContent = originalText; btn.disabled = false;
+        };
+
+        window.runInsuranceScenario = async (type) => {
+            const chatBox = document.getElementById('insurance-chat-box');
+            chatBox.innerHTML += `<div class="flex justify-end mb-2"><div class="bg-cyan-600 text-white py-2 px-3 rounded-2xl rounded-tr-none text-sm">🚨 模擬情境：${type}</div></div>`;
+            const loadingId = Date.now();
+            chatBox.innerHTML += `<div id="${loadingId}" class="flex justify-start mb-2"><div class="bg-white border border-gray-200 text-gray-500 py-2 px-3 rounded-2xl rounded-tl-none text-xs">AI 正在計算理賠...</div></div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const policiesStr = insurancePolicies.map(p => `${p.name} (額度/保費: $${p.amount}, 特色: ${p.features})`).join(', ');
+            const prompt = `角色:專業保險理賠專家。用戶現有保單: [${policiesStr}]。
+            情境: 用戶發生「${type}」。
+            任務:
+            1. 盤點哪些保單可能啟動理賠。
+            2. 粗估可能的理賠範圍 (若無資料請給出一般性建議)。
+            3. 提醒需要準備的文件或注意事項。
+            請用條列式、白話文回答。`;
+
+            try {
+                const res = await callAI(prompt);
+                document.getElementById(loadingId).remove();
+                chatBox.innerHTML += `<div class="flex justify-start mb-4"><div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center mr-2 text-lg flex-shrink-0">🤖</div><div class="bg-white text-gray-800 py-3 px-4 rounded-2xl rounded-tl-none text-sm shadow-sm border border-gray-100 max-w-[90%]">${parseMarkdown(res)}</div></div>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+                
+                chatSessionMemory['insurance'].push({role: 'user', text: `模擬情境：${type}`});
+                chatSessionMemory['insurance'].push({role: 'model', text: res});
+            } catch(e) {
+                document.getElementById(loadingId).remove();
+                showToast("模擬失敗", "error");
+            }
+        };
+
+        window.removeInsuranceNote = (id) => {
+            if(!confirm('刪除此筆記？')) return;
+            insuranceNotes = insuranceNotes.filter(i=>i.id!==id);
+            saveData();
+        };
+
+        window.removePolicy = (id) => {
+            if(!confirm('刪除此保單？')) return;
+            insurancePolicies = insurancePolicies.filter(p=>p.id!==id);
+            saveData();
         };
 
         window.removeInvestment = (id) => {
@@ -359,7 +446,7 @@
                     
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
-                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
+                    const spent = monthLogs.filter(l => l.category === v && !l.isAdjustment).reduce((a, b) => a + (b.amount || 0), 0);
                     const remaining = totalBudget - spent;
                     
                     budgetInfo = ` (預算剩: $${remaining})`;
@@ -367,7 +454,7 @@
                 else if (fixedItem) {
                     const monthStart = currentDate.substring(0, 7);
                     const monthLogs = dailyLogs.filter(l => l.dateStr.startsWith(monthStart));
-                    const spent = monthLogs.filter(l => l.category === v).reduce((a, b) => a + (b.amount || 0), 0);
+                    const spent = monthLogs.filter(l => l.category === v && !l.isAdjustment).reduce((a, b) => a + (b.amount || 0), 0);
                     const remaining = fixedItem.amount - spent;
                     budgetInfo = ` (預算剩: $${remaining})`;
                     targetSelectAccount = fixedItem.note; 
@@ -479,7 +566,7 @@
 
         // --- Data Import/Export ---
         window.exportData = () => {
-            const data = { accounts, monthlyIncome, fixedExpenses, investments, dailyLogs, userProfile };
+            const data = { accounts, monthlyIncome, fixedExpenses, investments, insurancePolicies, insuranceNotes, dailyLogs, userProfile };
             const blob = new Blob([JSON.stringify(data, null, 2)], {type : 'application/json'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -502,6 +589,8 @@
                     if(data.monthlyIncome) DB.set('income', data.monthlyIncome);
                     if(data.fixedExpenses) DB.set('fixed', data.fixedExpenses);
                     if(data.investments) DB.set('investments', data.investments);
+                    if(data.insurancePolicies) DB.set('insurance_policies', data.insurancePolicies); // Import Insurance
+                    if(data.insuranceNotes) DB.set('insurance_notes', data.insuranceNotes);       // Import Insurance Notes
                     if(data.dailyLogs) DB.set('logs', data.dailyLogs);
                     if(data.userProfile) DB.set('profile', data.userProfile);
                     location.reload();
@@ -577,13 +666,17 @@
                 const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
                 const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(monthStart));
                 
+                // Get History
+                const history = chatSessionMemory[contextType] || [];
+                const historyStr = history.slice(-10).map(h => `${h.role === 'user' ? '用戶' : 'AI'}: ${h.text}`).join('\n'); // Limit to last 10 turns
+
                 let context = "";
                 if(contextType === 'health') {
                     const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
                     const healthHistory = dailyLogs.filter(l => l.kcal > 0 && new Date(l.dateStr) >= sevenDaysAgo).map(l => `${l.dateStr}: ${l.description} (${l.kcal}kcal)`).join("\n");
                     const kcalIn = todayLogs.reduce((a,b)=>a+(b.kcal||0),0);
                     const burned = todayLogs.reduce((a,b)=>a+(b.burned||0),0);
-                    context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日攝${kcalIn}/消${burned}。近期:${healthHistory}。請簡短回答。`;
+                    context = `角色:營養教練。數據: 身高${userProfile.height}cm/體重${userProfile.weight}kg, 目標${userProfile.targetKcal}kcal。今日攝${kcalIn}/消${burned}。近期紀錄:${healthHistory}。請簡短回答。請記住對話上下文。`;
                 } else if (contextType === 'finance') {
                     const incomeTotal = Object.values(monthlyIncome).reduce((a,b)=>a+b,0);
                     const fixedTotal = fixedExpenses.reduce((a,b)=>a+b.amount,0);
@@ -594,16 +687,37 @@
                     const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
                     const invContext = investments.map(i => `${i.symbol}: ${i.note}`).join(", ");
                     
+                    // Cross-reference Insurance
+                    const insTotal = insurancePolicies.reduce((a,b)=>a+(b.amount||0),0);
+                    const insContext = `保險年繳:$${insTotal}。`;
+
                     const portfolio = {};
                     dailyLogs.filter(l => l.category === '投資').forEach(l => { portfolio[l.description.trim()] = (portfolio[l.description.trim()] || 0) + (l.amount || 0); });
                     const portStr = Object.entries(portfolio).map(([k,v]) => `${k}:$${v}`).join(", ");
 
-                    context = `角色:理財顧問。月收${incomeTotal}, 固定支${fixedTotal}, 可支配${disposable}。娛樂剩${entBudget - entSpent}。總資產${totalAsset}。持倉:[${portStr}]。觀點:[${invContext}]。請簡短回答。`;
+                    context = `角色:理財顧問。月收${incomeTotal}, 固定支${fixedTotal}, 可支配${disposable}。娛樂剩${entBudget - entSpent}。總資產${totalAsset}。持倉:[${portStr}]。${insContext} 觀點:[${invContext}]。請簡短回答。請記住對話上下文。`;
+                } else if (contextType === 'insurance') {
+                    const totalPremium = insurancePolicies.reduce((a,b)=>a+(b.amount||0),0);
+                    const policiesStr = insurancePolicies.map(p => `${p.name}($${p.amount})`).join(', ');
+                    
+                    // Cross-reference Finance
+                    const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
+                    const finContext = `目前總資產:$${totalAsset}。`;
+
+                    context = `角色:保險顧問。用戶: ${userProfile.age}歲, ${userProfile.gender==='male'?'男':'女'}。${finContext} 現有保單: [${policiesStr}]。年繳總保費: $${totalPremium}。請簡短回答用戶問題。請記住對話上下文。`;
                 }
 
-                const res = await callAI(context + " 用戶問:" + msg);
-                document.getElementById(loadingId).remove();
+                // Construct full prompt with history
+                const fullPrompt = `${context}\n\n[對話歷史]\n${historyStr}\n\n用戶問: ${msg}`;
+
+                const res = await callAI(fullPrompt);
+                
+                // Save to Memory
+                chatSessionMemory[contextType].push({ role: 'user', text: msg });
                 const displayNum = typeof res === 'object' ? `AI Error: ${res.error}` : res; 
+                chatSessionMemory[contextType].push({ role: 'model', text: displayNum });
+
+                document.getElementById(loadingId).remove();
                 chatBox.innerHTML += `<div class="flex justify-start mb-4"><div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center mr-2 text-lg flex-shrink-0">🤖</div><div class="bg-white text-gray-800 py-3 px-4 rounded-2xl rounded-tl-none text-sm shadow-sm border border-gray-100 max-w-[90%]">${parseMarkdown(displayNum)}</div></div>`;
                 chatBox.scrollTop = chatBox.scrollHeight;
             } catch(e) { 
@@ -753,26 +867,22 @@
             setValue('port-current', currentAmt);
             setValue('port-target', currentAmt); 
             
-            const sel = document.getElementById('port-account-select');
-            sel.innerHTML = '<option value="none">🚫 純記帳 (不影響資產)</option>' + 
-                            accounts.map(a => `<option value="${a.name}">${a.name} ($${a.balance})</option>`).join('');
-            
             document.getElementById('portfolio-action-modal').classList.remove('hidden');
         };
 
         window.submitPortfolioUpdate = () => {
             const target = parseInt(document.getElementById('port-target').value) || 0;
-            const account = document.getElementById('port-account-select').value;
             const diff = target - currentEditingAmount;
             
             if (diff === 0) { closeModal('portfolio-action'); return; }
             
             const desc = currentEditingSymbol; 
-            const card = account === 'none' ? null : account;
+            const card = null; // 強制不連動帳戶
             
-            commitLog({ description: desc, amount: diff, category: '投資', card: card, type: 'finance' });
+            // 加入 isAdjustment 標記，避免計入「今日支出」
+            commitLog({ description: desc, amount: diff, category: '投資', card: card, type: 'finance', isAdjustment: true });
             
-            showToast('持倉已更新', 'success');
+            showToast('持倉已更新 (不影響支出/餘額)', 'success');
             closeModal('portfolio-action');
         };
 
@@ -780,7 +890,6 @@
             try {
                 if(!confirm(`確定要刪除「${currentEditingSymbol}」的所有歷史紀錄嗎？\n\n(注意：若當初有綁定扣款帳戶，金額將會退回)`)) return;
                 
-                // FIXED: Robust string comparison
                 const targetSym = String(currentEditingSymbol).trim();
                 const logsToRemove = dailyLogs.filter(l => l.category === '投資' && String(l.description).trim() === targetSym);
                 
@@ -833,14 +942,41 @@
                 showToast("處理圖片中...", "info");
                 try {
                     const url = await compressImage(f);
-                    selectedImageBase64 = url.split(',')[1]; 
-                    setHTML('image-preview', `<img src="${url}" class="h-16 rounded shadow-sm border">`); 
-                    closeModal('camera-choice');
+                    if(uploadContext === 'policy') {
+                        await analyzePolicyImage(url);
+                        closeModal('camera-choice');
+                    } else {
+                        selectedImageBase64 = url.split(',')[1]; 
+                        setHTML('image-preview', `<img src="${url}" class="h-16 rounded shadow-sm border">`); 
+                        closeModal('camera-choice');
+                    }
                 } catch(err) { showToast("圖片失敗", "error"); }
             }
         };
 
-        window.openCameraModal = () => document.getElementById('camera-choice-modal').classList.remove('hidden');
+        window.analyzePolicyImage = async (url) => {
+            showToast("AI 正在辨識保單...", "info");
+            try {
+                const base64 = url.split(',')[1];
+                const res = await callAI(`請辨識這張保單圖片。回傳 JSON 格式: {"name": "保單名稱", "amount": 年繳保費數字, "features": "保單特色(如:實支實付, 壽險)"}。`, base64);
+                
+                if (res.name) {
+                    insurancePolicies.push({ id: Date.now(), name: res.name, amount: res.amount || 0, date: currentDate, features: res.features || 'AI 辨識' });
+                    saveData();
+                    showToast("保單匯入成功！", "success");
+                } else {
+                    throw new Error("無法辨識");
+                }
+            } catch(e) {
+                showToast("辨識失敗，請手動輸入", "error");
+                openInputModal('insurance_add');
+            }
+        };
+
+        window.openCameraModal = (ctx='log') => {
+            uploadContext = ctx;
+            document.getElementById('camera-choice-modal').classList.remove('hidden');
+        };
         window.triggerCamera = () => document.getElementById('input-camera').click();
         window.triggerGallery = () => document.getElementById('input-gallery').click();
         
@@ -857,14 +993,18 @@
 
         // --- Render UI ---
         window.refreshUI = () => {
-            const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate);
             const monthStart = currentDate.substring(0, 7);
             const monthLogs = dailyLogs.filter(l=>l.dateStr.startsWith(monthStart));
+            
+            // FIXED: CRITICAL! Define a subset of logs that EXCLUDES adjustments for ALL budget calculations
+            const validMonthLogs = monthLogs.filter(l => !l.isAdjustment);
 
             // Dash Stats
+            const todayLogs = dailyLogs.filter(l=>l.dateStr===currentDate && !l.isAdjustment);
             const kcalIn = todayLogs.reduce((a,b)=>a+(b.kcal||0),0);
             const burned = todayLogs.reduce((a,b)=>a+(b.burned||0),0);
             const spent = todayLogs.filter(l=>l.type.includes('finance')).reduce((a,b)=>a+(b.amount||0),0);
+            
             setText('today-record-sum', `(總支出: $${spent})`);
             setText('dash-food', `$${spent}`);
             setText('dash-in', kcalIn);
@@ -874,7 +1014,7 @@
 
             updateCategoryDropdown();
 
-            // Log List (FIXED: Added Protein Display)
+            // Log List
             setHTML('log-list', todayLogs.length ? todayLogs.map(l=>`
                 <div class="flex justify-between p-3 border-b border-gray-100 text-sm">
                     <div class="flex items-center gap-2"><span class="text-lg">${categoryIcons[l.category]||'📝'}</span><div><div class="font-bold text-gray-700">${l.description}</div><div class="text-[10px] text-gray-400">${l.category} · ${l.card?`<span onclick="openInputModal('change_account','${l.id}')" class="text-blue-500 cursor-pointer underline decoration-dotted">${l.card}</span>`:'無'}</div></div></div>
@@ -884,7 +1024,8 @@
             // Fixed Expenses & Budgets
             let fixedRemTotal = 0;
             setHTML('dash-fixed-list', fixedExpenses.map(f => {
-                const used = monthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
+                // FIXED: Use validMonthLogs to ensure adjustments are ignored here too
+                const used = validMonthLogs.filter(l => l.category === f.name || l.description.includes(f.name)).reduce((a,b) => a + (b.amount||0), 0);
                 const rem = f.amount - used;
                 fixedRemTotal += rem;
                 return `<div class="flex justify-between p-2 text-sm border-b items-center"><div class="flex items-center gap-2">${used>0?'<span class="text-green-500 text-xs">🟢</span>':'<span class="text-gray-200 text-xs">⚪</span>'}<div><div class="font-medium">${f.name}</div><div class="text-xs text-gray-400">剩: $${rem} · 綁定: ${f.note}</div></div></div><div class="flex items-center"><span class="font-bold px-1 rounded ${rem<0?'text-red-500':'text-gray-800'}" onclick="openInputModal('fixed_edit',${f.id})">$${f.amount}</span><button onclick="removeFixed(${f.id})" class="text-red-400 ml-2">×</button></div></div>`;
@@ -905,8 +1046,9 @@
             const entBudget = Math.round(disposable * (entRatio/100));
             const invBudget = disposable - entBudget;
             
-            const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
-            const invSpent = monthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
+            // FIXED: Use validMonthLogs here
+            const entSpent = validMonthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
+            const invSpent = validMonthLogs.filter(l => l.category === '投資').reduce((a,b) => a + (b.amount||0), 0);
             
             const entRem = entBudget - entSpent;
             const invRem = invBudget - invSpent;
@@ -923,10 +1065,10 @@
             ['salary','bonus','overtime','oncall'].forEach(k => { const el=document.getElementById(`inc-${k}`); if(el) el.value=monthlyIncome[k]; });
             setHTML('rep-acc-list', accounts.map((a,i)=>`<div class="flex justify-between p-2 text-sm border-b"><span>${a.name}</span><div><span class="font-bold ${a.balance<0?'text-red-500':'text-blue-600'}">$${a.balance}</span> <button onclick="openInputModal('balance',${i})" class="text-gray-400 ml-2">✎</button></div></div>`).join(''));
 
-            // Portfolio
+            // Portfolio (Must Include Adjustments to be correct, so we use dailyLogs, NOT validMonthLogs)
             const portfolio = {};
             dailyLogs.filter(l => l.category === '投資').forEach(l => {
-                const s = String(l.description).trim(); // FIXED: Safe trim
+                const s = String(l.description).trim(); 
                 if(s) portfolio[s] = (portfolio[s] || 0) + (l.amount || 0);
             });
             setHTML('portfolio-list', Object.keys(portfolio).length ? Object.entries(portfolio).map(([s,a]) => `
@@ -936,6 +1078,33 @@
                 </div>`).join('') : '<div class="text-center text-gray-400 text-xs py-2">尚無持倉紀錄</div>');
 
             setHTML('inv-list', investments.map(i=>`<div class="bg-gray-50 p-3 rounded-xl mb-3 border border-gray-100"><div class="flex justify-between items-start mb-2"><div><span class="bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded text-xs">${i.symbol}</span><span class="text-xs text-gray-400 ml-2">${i.date}</span></div><button onclick="removeInvestment('${i.id}')" class="text-gray-400 hover:text-red-600 p-1">🗑️</button></div><div class="text-sm font-medium text-gray-800 mb-2">"${i.note}"</div><div class="text-xs bg-white p-2 rounded border border-indigo-100 text-gray-600 leading-relaxed">${parseMarkdown(i.feedback)}</div></div>`).join(''));
+
+            // NEW: Insurance List with Cards and Shield
+            const totalInsPremium = insurancePolicies.reduce((a,b)=>a+(b.amount||0),0);
+            const totalIncome = Object.values(monthlyIncome).reduce((a,b)=>a+b,0) * 12;
+            const shieldStatus = totalInsPremium === 0 ? 'shield-red' : (totalInsPremium > (totalIncome * 0.15) ? 'shield-yellow' : 'shield-green');
+            
+            setText('ins-total-premium', `$${totalInsPremium.toLocaleString()}`);
+            document.getElementById('ins-shield-icon').className = `text-4xl mb-1 ${shieldStatus}`;
+            
+            setHTML('policy-list', insurancePolicies.length ? insurancePolicies.map(p=>`
+                <div class="bg-gradient-to-br from-teal-50 to-white p-3 rounded-xl border border-teal-100 shadow-sm relative overflow-hidden">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <div class="text-xs text-teal-600 font-bold mb-1">🛡️ 保單</div>
+                            <div class="font-bold text-gray-800 text-lg">${p.name}</div>
+                            <div class="text-xs text-gray-500 mt-1">${p.features || '一般保險'}</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-black text-teal-700 text-xl">$${p.amount.toLocaleString()}</div>
+                            <div class="text-[10px] text-gray-400">/年</div>
+                        </div>
+                    </div>
+                    <button onclick="removePolicy('${p.id}')" class="absolute top-2 right-2 text-gray-300 hover:text-red-500">×</button>
+                </div>
+            `).join('') : '<div class="text-center text-gray-400 text-xs py-4">尚未新增保單</div>');
+
+            setHTML('insurance-note-list', insuranceNotes.map(i=>`<div class="bg-gray-50 p-3 rounded-xl mb-3 border border-gray-100"><div class="flex justify-between items-start mb-2"><div><span class="text-xs text-gray-400">${i.date}</span></div><button onclick="removeInsuranceNote('${i.id}')" class="text-gray-400 hover:text-red-600 p-1">🗑️</button></div><div class="text-sm font-medium text-gray-800 mb-2">"${i.note}"</div><div class="text-xs bg-white p-2 rounded border border-cyan-100 text-gray-600 leading-relaxed">${parseMarkdown(i.feedback)}</div></div>`).join(''));
 
             setValue('prof-height', userProfile.height);
             setValue('prof-weight', userProfile.weight);
@@ -965,10 +1134,9 @@
                 <input id="port-target" type="number" class="w-full border-2 border-blue-100 p-2 rounded text-lg font-black text-blue-800 focus:outline-none focus:border-blue-500" placeholder="輸入修正後的總金額">
             </div>
 
-            <div class="mb-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
-                <label class="text-xs text-gray-500 block mb-2">差額處理 (是否連動資產?)</label>
-                <select id="port-account-select" class="w-full border p-2 rounded text-sm bg-white font-bold"></select>
-                <div class="text-[10px] text-gray-400 mt-1">* 選擇「無」則只記帳，不扣除/退回存款</div>
+            <div class="mb-4 bg-yellow-50 p-3 rounded-lg border border-yellow-100">
+                <div class="text-xs text-yellow-700 font-bold">⚠️ 此調整僅更新持倉紀錄</div>
+                <div class="text-[10px] text-yellow-600 mt-1">不會扣除或退回任何銀行帳戶餘額。若需記帳扣款，請使用「+ 買入」功能。</div>
             </div>
 
             <div class="flex flex-col gap-2">
@@ -1027,7 +1195,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.12</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.19</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1064,7 +1232,7 @@
                 </div>
                 <input id="finance-card-custom" type="text" placeholder="輸入帳戶名稱" class="w-full border p-2 rounded text-sm mb-2 hidden">
                 <div class="flex items-center gap-2 mb-2">
-                     <button onclick="openCameraModal()" class="bg-gray-50 border border-gray-200 rounded-lg p-2 w-12 hover:bg-gray-100 text-xl">📷</button>
+                     <button onclick="openCameraModal('log')" class="bg-gray-50 border border-gray-200 rounded-lg p-2 w-12 hover:bg-gray-100 text-xl">📷</button>
                     <input id="log-description" placeholder="描述" class="flex-grow border border-gray-200 p-2 rounded text-sm h-10">
                     <input id="log-amount" type="number" placeholder="$" class="w-16 border border-gray-200 p-2 rounded text-center font-bold text-sm h-10">
                 </div>
@@ -1153,6 +1321,61 @@
             </div>
         </div>
 
+        <!-- Insurance -->
+        <div id="insurance-view" class="tab-view hidden">
+            <!-- Shield Dashboard -->
+            <div class="bg-white rounded-xl shadow-md p-4 mb-4 text-center border border-gray-100">
+                <div id="ins-shield-icon" class="text-4xl mb-1 shield-green">🛡️</div>
+                <div class="text-sm font-bold text-gray-800">保障防護網</div>
+                <div class="text-xs text-gray-400 mt-1">目前年繳總保費: <span id="ins-total-premium" class="font-bold text-teal-600">$0</span></div>
+            </div>
+
+            <!-- Scenario Analysis -->
+            <div class="grid grid-cols-3 gap-2 mb-4">
+                <button onclick="runInsuranceScenario('住院手術')" class="bg-red-50 p-3 rounded-xl text-center border border-red-100 active:scale-95 transition-transform">
+                    <div class="text-xl mb-1">🏥</div>
+                    <div class="text-xs font-bold text-red-700">生病住院</div>
+                </button>
+                <button onclick="runInsuranceScenario('癌症治療')" class="bg-orange-50 p-3 rounded-xl text-center border border-orange-100 active:scale-95 transition-transform">
+                    <div class="text-xl mb-1">🦀</div>
+                    <div class="text-xs font-bold text-orange-700">罹患癌症</div>
+                </button>
+                <button onclick="runInsuranceScenario('意外車禍')" class="bg-blue-50 p-3 rounded-xl text-center border border-blue-100 active:scale-95 transition-transform">
+                    <div class="text-xl mb-1">🚗</div>
+                    <div class="text-xs font-bold text-blue-700">發生意外</div>
+                </button>
+            </div>
+
+            <!-- Policy List -->
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-teal-200">
+                <div class="flex justify-between items-center mb-3 border-b border-teal-100 pb-2">
+                    <h3 class="font-bold text-teal-800 text-sm flex items-center gap-1">我的保險錢包</h3>
+                    <div class="flex gap-2">
+                        <button onclick="openCameraModal('policy')" class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded border hover:bg-gray-200">📷 掃描</button>
+                        <button onclick="openInputModal('insurance_add')" class="bg-teal-600 text-white text-xs font-bold px-3 py-1 rounded-lg shadow hover:bg-teal-700 active:scale-95">＋ 新增</button>
+                    </div>
+                </div>
+                <div id="policy-list" class="space-y-2"></div>
+            </div>
+
+            <!-- Advisor Section -->
+            <div class="bg-white rounded-xl shadow-sm border border-cyan-200 p-4 mb-4">
+                <h3 class="font-bold text-cyan-700 text-sm mb-3 flex items-center border-b border-cyan-100 pb-2"><span class="text-lg mr-2">🧐</span> 保險顧問</h3>
+                <div id="insurance-chat-box" class="h-64 overflow-y-auto mb-3 text-sm space-y-2 pr-1"><div class="text-center text-gray-300 text-xs py-2">我可以評估您的風險缺口...</div></div>
+                <div class="flex gap-2"><input id="insurance-chat-input" type="text" placeholder="問顧問..." class="flex-grow bg-gray-50 border rounded-lg px-3 py-2 text-sm"><button onclick="sendAIChat('insurance')" class="bg-cyan-600 text-white px-4 rounded-lg font-bold text-sm shadow-sm active:scale-95">發送</button></div>
+            </div>
+
+            <!-- Notes Section -->
+            <div class="bg-white rounded-xl shadow-sm p-4 mb-4 border border-gray-200">
+                <h3 class="font-bold text-gray-800 mb-3 border-b pb-2">我的保險筆記</h3>
+                <div class="bg-gray-50 p-3 rounded-xl mb-3">
+                    <div class="flex gap-2 mb-2"><input id="ins-note-input" type="text" placeholder="記錄想法 (e.g. 考慮增加醫療險)" class="w-full p-2 rounded border border-gray-200 text-sm"></div>
+                    <button id="ins-add-btn" onclick="addInsuranceNote()" class="w-full bg-gray-800 text-white py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700">＋ 新增並 AI 分析</button>
+                </div>
+                <div id="insurance-note-list"></div>
+            </div>
+        </div>
+
         <!-- Settings -->
         <div id="settings-view" class="tab-view hidden">
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
@@ -1195,15 +1418,16 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.12</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.19</div>
         </div>
     </main>
 
     <div class="fixed bottom-0 w-full bg-white border-t flex justify-around py-3 z-30 pb-6 safe-area-pb">
-        <button onclick="switchTab('dashboard')" class="nav-btn text-blue-600 font-bold text-xs flex flex-col items-center w-1/4" id="nav-dashboard"><span class="text-xl">🏠</span>駕駛艙</button>
-        <button onclick="switchTab('finance')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4" id="nav-finance"><span class="text-xl">📊</span>報表</button>
-        <button onclick="switchTab('investment')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4" id="nav-investment"><span class="text-xl">📈</span>投資</button>
-        <button onclick="switchTab('settings')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/4" id="nav-settings"><span class="text-xl">⚙️</span>設定</button>
+        <button onclick="switchTab('dashboard')" class="nav-btn text-blue-600 font-bold text-xs flex flex-col items-center w-1/5" id="nav-dashboard"><span class="text-xl">🏠</span>駕駛艙</button>
+        <button onclick="switchTab('finance')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/5" id="nav-finance"><span class="text-xl">📊</span>報表</button>
+        <button onclick="switchTab('investment')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/5" id="nav-investment"><span class="text-xl">📈</span>投資</button>
+        <button onclick="switchTab('insurance')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/5" id="nav-insurance"><span class="text-xl">🛡️</span>保險</button>
+        <button onclick="switchTab('settings')" class="nav-btn text-gray-400 font-bold text-xs flex flex-col items-center w-1/5" id="nav-settings"><span class="text-xl">⚙️</span>設定</button>
     </div>
 </body>
 </html>
