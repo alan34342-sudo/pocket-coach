@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.20</title>
+    <title>Pocket Coach v18.21</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -66,14 +66,14 @@
         let currentViewMonth = new Date(); 
         let selectedImageBase64 = null; 
         let window_pendingLog = {};
-        let uploadContext = 'log'; // 'log' or 'policy'
+        let uploadContext = 'log'; 
         
-        // Portfolio Management Vars
+        // Portfolio & Policy Vars
         let currentEditingSymbol = '';
         let currentEditingAmount = 0;
         let currentInputMode = ''; 
         let currentInputId = null;
-        let pendingPolicyData = null; // For verifying AI policy data
+        let editingPolicyId = null; // Track if we are editing an existing policy
 
         // Chat Memory
         let chatSessionMemory = { health: [], finance: [], insurance: [] };
@@ -241,7 +241,6 @@
                 const sel = document.getElementById('input-account-select');
                 sel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
             }
-            // Removed simple insurance_add, redirected to detailed modal in button click
         };
 
         window.submitInputModal = () => {
@@ -272,7 +271,6 @@
                 if(!note) return showToast('請輸入代號','error');
                 const acc = document.getElementById('input-account-select').value;
                 const card = acc === 'none' ? null : acc;
-                // 一般買入，視為正常支出
                 commitLog({ description: note, amount: val, category: '投資', card: card, type: 'finance' });
             }
             else if(currentInputMode === 'change_account') {
@@ -309,19 +307,29 @@
             btn.textContent = originalText; btn.disabled = false;
         };
 
-        // New Insurance Functions
-        window.openPolicyModal = (data = null) => {
-            pendingPolicyData = data || {};
-            setValue('pol-company', pendingPolicyData.company || '');
-            setValue('pol-no', pendingPolicyData.policyNo || '');
-            setValue('pol-type', pendingPolicyData.type || '主約');
-            setValue('pol-period', pendingPolicyData.period || '');
-            setValue('pol-content', pendingPolicyData.content || '');
-            setValue('pol-exceptions', pendingPolicyData.exceptions || '');
-            setValue('pol-amount', pendingPolicyData.amount || '');
-            setValue('pol-payment', pendingPolicyData.payment || '');
+        // --- Policy Edit Functions (Improved) ---
+        window.openPolicyModal = (data = null, existingId = null) => {
+            editingPolicyId = existingId; // Store ID if editing, null if new
+            const p = data || {};
+            
+            // Populate fields
+            setValue('pol-company', p.company || '');
+            setValue('pol-no', p.policyNo || '');
+            setValue('pol-type', p.type || '主約');
+            setValue('pol-period', p.period || '');
+            setValue('pol-content', p.content || '');
+            setValue('pol-exceptions', p.exceptions || '');
+            setValue('pol-amount', p.amount || '');
+            setValue('pol-payment', p.payment || '');
             
             document.getElementById('policy-edit-modal').classList.remove('hidden');
+        };
+
+        window.editPolicy = (id) => {
+            const policy = insurancePolicies.find(p => p.id === id);
+            if(policy) {
+                openPolicyModal(policy, id);
+            }
         };
 
         window.saveVerifiedPolicy = () => {
@@ -330,8 +338,8 @@
             
             if(!company) return showToast("請輸入保險名稱", "error");
 
-            const newPolicy = {
-                id: Date.now().toString(),
+            const policyData = {
+                id: editingPolicyId || Date.now().toString(), // Use existing ID or create new
                 company: company,
                 policyNo: document.getElementById('pol-no').value,
                 type: document.getElementById('pol-type').value,
@@ -343,10 +351,20 @@
                 date: currentDate
             };
 
-            insurancePolicies.push(newPolicy);
+            if (editingPolicyId) {
+                // Update existing
+                const idx = insurancePolicies.findIndex(p => p.id === editingPolicyId);
+                if (idx !== -1) {
+                    insurancePolicies[idx] = policyData;
+                }
+            } else {
+                // Add new
+                insurancePolicies.push(policyData);
+            }
+
             saveData();
             closeModal('policy-edit');
-            showToast("保單已儲存", "success");
+            showToast(editingPolicyId ? "保單已更新" : "保單已新增", "success");
         };
 
         window.addInsuranceNote = async () => {
@@ -675,7 +693,7 @@
                     const json = await r.json();
                     const txt = json.candidates?.[0]?.content?.parts?.[0]?.text;
                     if (!txt) throw new Error("Empty Response");
-                    if (prompt.includes('JSON')) { const jsonMatch = txt.match(/\{[\s\S]*\}/); return jsonMatch ? JSON.parse(jsonMatch[0]) : {kcal:0, protein:0, burned:0}; }
+                    if (prompt.includes('JSON')) { const jsonMatch = txt.match(/\{[\s\S]*\}/); return jsonMatch ? JSON.parse(jsonMatch[0]) : null; } // FIXED: generic fallback
                     return txt;
                 } catch (e) { if (retries === maxRetries) { const isJson = prompt.includes('JSON'); if(isJson) return { error: e.message }; return `[系統錯誤] ${e.message}`; } await wait(delay); retries++; delay *= 2; }
             }
@@ -989,9 +1007,18 @@
             showToast("AI 正在辨識保單...", "info");
             try {
                 const base64 = url.split(',')[1];
-                const res = await callAI(`請辨識保單圖片。請回傳純 JSON 格式 (不要 Markdown)，包含以下欄位：company (保險公司與商品名稱), policyNo (保單號碼), type (主約或附約), period (生效日與繳費年期), content (保障內容摘要), exceptions (除外責任或備註), amount (年繳保費，純數字), payment (扣款方式)。若無法辨識請填 "待確認"。`, base64);
+                const res = await callAI(`請辨識保單圖片。請務必回傳純 JSON 格式 (不要 Markdown code block)，嚴格遵守以下欄位名稱：
+- company: 保險公司與商品名稱
+- policyNo: 保單號碼
+- type: 主約或附約
+- period: 生效日與繳費年期
+- content: 保障內容摘要 (請條列式)
+- exceptions: 除外責任或備註
+- amount: 年繳保費 (純數字，若無則填 0)
+- payment: 扣款方式
+若圖片模糊或無法辨識某欄位，請填 "待確認"。`, base64);
                 
-                if (res.company) {
+                if (res && res.company) {
                     openPolicyModal(res);
                 } else {
                     throw new Error("無法辨識");
@@ -1136,7 +1163,10 @@
                         <div class="mb-1"><span class="font-bold">內容:</span> ${p.content || '無摘要'}</div>
                         ${p.exceptions ? `<div class="text-red-400"><span class="font-bold">注意:</span> ${p.exceptions}</div>` : ''}
                     </div>
-                    <button onclick="removePolicy('${p.id}')" class="absolute top-2 right-2 text-gray-300 hover:text-red-500">×</button>
+                    <div class="absolute top-2 right-2 flex gap-1">
+                        <button onclick="editPolicy('${p.id}')" class="text-gray-400 hover:text-blue-500 bg-white/80 p-1 rounded-full border border-gray-100 shadow-sm">✎</button>
+                        <button onclick="removePolicy('${p.id}')" class="text-gray-400 hover:text-red-500 bg-white/80 p-1 rounded-full border border-gray-100 shadow-sm">×</button>
+                    </div>
                 </div>
             `).join('') : '<div class="text-center text-gray-400 text-xs py-4">尚未新增保單</div>');
 
@@ -1154,19 +1184,27 @@
         };
 
         // NEW: Policy Edit Modal Functions
-        window.openPolicyModal = (data = null) => {
-            pendingPolicyData = data || {};
+        window.openPolicyModal = (data = null, existingId = null) => {
+            editingPolicyId = existingId; // Store ID if editing, null if new
+            const p = data || {};
             // If data is passed (from AI), map it. If not (manual add), clear it.
-            setValue('pol-company', pendingPolicyData.company || '');
-            setValue('pol-no', pendingPolicyData.policyNo || '');
-            setValue('pol-type', pendingPolicyData.type || '主約');
-            setValue('pol-period', pendingPolicyData.period || '');
-            setValue('pol-content', pendingPolicyData.content || '');
-            setValue('pol-exceptions', pendingPolicyData.exceptions || '');
-            setValue('pol-amount', pendingPolicyData.amount || '');
-            setValue('pol-payment', pendingPolicyData.payment || '');
+            setValue('pol-company', p.company || '');
+            setValue('pol-no', p.policyNo || '');
+            setValue('pol-type', p.type || '主約');
+            setValue('pol-period', p.period || '');
+            setValue('pol-content', p.content || '');
+            setValue('pol-exceptions', p.exceptions || '');
+            setValue('pol-amount', p.amount || '');
+            setValue('pol-payment', p.payment || '');
             
             document.getElementById('policy-edit-modal').classList.remove('hidden');
+        };
+
+        window.editPolicy = (id) => {
+            const policy = insurancePolicies.find(p => p.id === id);
+            if(policy) {
+                openPolicyModal(policy, id);
+            }
         };
 
         window.saveVerifiedPolicy = () => {
@@ -1175,8 +1213,8 @@
             
             if(!company) return showToast("請輸入保險名稱", "error");
 
-            const newPolicy = {
-                id: Date.now().toString(),
+            const policyData = {
+                id: editingPolicyId || Date.now().toString(), // Use existing ID or create new
                 company: company,
                 policyNo: document.getElementById('pol-no').value,
                 type: document.getElementById('pol-type').value,
@@ -1188,10 +1226,20 @@
                 date: currentDate
             };
 
-            insurancePolicies.push(newPolicy);
+            if (editingPolicyId) {
+                // Update existing
+                const idx = insurancePolicies.findIndex(p => p.id === editingPolicyId);
+                if (idx !== -1) {
+                    insurancePolicies[idx] = policyData;
+                }
+            } else {
+                // Add new
+                insurancePolicies.push(policyData);
+            }
+
             saveData();
             closeModal('policy-edit');
-            showToast("保單已儲存", "success");
+            showToast(editingPolicyId ? "保單已更新" : "保單已新增", "success");
         };
     </script>
 </head>
@@ -1334,7 +1382,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.20</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.21</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1557,7 +1605,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.20</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.21</div>
         </div>
     </main>
 
