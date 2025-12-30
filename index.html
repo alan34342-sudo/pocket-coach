@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.19</title>
+    <title>Pocket Coach v18.20</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -73,6 +73,7 @@
         let currentEditingAmount = 0;
         let currentInputMode = ''; 
         let currentInputId = null;
+        let pendingPolicyData = null; // For verifying AI policy data
 
         // Chat Memory
         let chatSessionMemory = { health: [], finance: [], insurance: [] };
@@ -240,13 +241,7 @@
                 const sel = document.getElementById('input-account-select');
                 sel.innerHTML = accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
             }
-            else if(mode === 'insurance_add') {
-                title.textContent = '新增保單';
-                noteC.classList.remove('hidden');
-                noteInput.placeholder = '保單名稱';
-                valC.classList.remove('hidden');
-                lbl.textContent = '年繳金額';
-            }
+            // Removed simple insurance_add, redirected to detailed modal in button click
         };
 
         window.submitInputModal = () => {
@@ -277,16 +272,13 @@
                 if(!note) return showToast('請輸入代號','error');
                 const acc = document.getElementById('input-account-select').value;
                 const card = acc === 'none' ? null : acc;
+                // 一般買入，視為正常支出
                 commitLog({ description: note, amount: val, category: '投資', card: card, type: 'finance' });
             }
             else if(currentInputMode === 'change_account') {
                 const acc = document.getElementById('input-account-select').value;
                 const idx = dailyLogs.findIndex(l=>l.id===currentInputId);
                 if(idx!==-1) dailyLogs[idx].card = acc;
-            }
-            else if(currentInputMode === 'insurance_add') {
-                if(!note) return showToast('請輸入保單名稱','error');
-                insurancePolicies.push({ id: Date.now(), name: note, amount: val, date: currentDate, features: "手動輸入" });
             }
 
             saveData();
@@ -318,6 +310,45 @@
         };
 
         // New Insurance Functions
+        window.openPolicyModal = (data = null) => {
+            pendingPolicyData = data || {};
+            setValue('pol-company', pendingPolicyData.company || '');
+            setValue('pol-no', pendingPolicyData.policyNo || '');
+            setValue('pol-type', pendingPolicyData.type || '主約');
+            setValue('pol-period', pendingPolicyData.period || '');
+            setValue('pol-content', pendingPolicyData.content || '');
+            setValue('pol-exceptions', pendingPolicyData.exceptions || '');
+            setValue('pol-amount', pendingPolicyData.amount || '');
+            setValue('pol-payment', pendingPolicyData.payment || '');
+            
+            document.getElementById('policy-edit-modal').classList.remove('hidden');
+        };
+
+        window.saveVerifiedPolicy = () => {
+            const company = document.getElementById('pol-company').value;
+            const amount = parseInt(document.getElementById('pol-amount').value) || 0;
+            
+            if(!company) return showToast("請輸入保險名稱", "error");
+
+            const newPolicy = {
+                id: Date.now().toString(),
+                company: company,
+                policyNo: document.getElementById('pol-no').value,
+                type: document.getElementById('pol-type').value,
+                period: document.getElementById('pol-period').value,
+                content: document.getElementById('pol-content').value,
+                exceptions: document.getElementById('pol-exceptions').value,
+                amount: amount,
+                payment: document.getElementById('pol-payment').value,
+                date: currentDate
+            };
+
+            insurancePolicies.push(newPolicy);
+            saveData();
+            closeModal('policy-edit');
+            showToast("保單已儲存", "success");
+        };
+
         window.addInsuranceNote = async () => {
             const n = document.getElementById('ins-note-input').value;
             if(!n) return showToast("請輸入筆記", "error");
@@ -345,7 +376,7 @@
             chatBox.innerHTML += `<div id="${loadingId}" class="flex justify-start mb-2"><div class="bg-white border border-gray-200 text-gray-500 py-2 px-3 rounded-2xl rounded-tl-none text-xs">AI 正在計算理賠...</div></div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
-            const policiesStr = insurancePolicies.map(p => `${p.name} (額度/保費: $${p.amount}, 特色: ${p.features})`).join(', ');
+            const policiesStr = insurancePolicies.map(p => `${p.company} (額度/保費: $${p.amount}, 內容: ${p.content})`).join(', ');
             const prompt = `角色:專業保險理賠專家。用戶現有保單: [${policiesStr}]。
             情境: 用戶發生「${type}」。
             任務:
@@ -698,7 +729,7 @@
                     context = `角色:理財顧問。月收${incomeTotal}, 固定支${fixedTotal}, 可支配${disposable}。娛樂剩${entBudget - entSpent}。總資產${totalAsset}。持倉:[${portStr}]。${insContext} 觀點:[${invContext}]。請簡短回答。請記住對話上下文。`;
                 } else if (contextType === 'insurance') {
                     const totalPremium = insurancePolicies.reduce((a,b)=>a+(b.amount||0),0);
-                    const policiesStr = insurancePolicies.map(p => `${p.name}($${p.amount})`).join(', ');
+                    const policiesStr = insurancePolicies.map(p => `${p.company}($${p.amount})`).join(', ');
                     
                     // Cross-reference Finance
                     const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
@@ -958,18 +989,16 @@
             showToast("AI 正在辨識保單...", "info");
             try {
                 const base64 = url.split(',')[1];
-                const res = await callAI(`請辨識這張保單圖片。回傳 JSON 格式: {"name": "保單名稱", "amount": 年繳保費數字, "features": "保單特色(如:實支實付, 壽險)"}。`, base64);
+                const res = await callAI(`請辨識保單圖片。請回傳純 JSON 格式 (不要 Markdown)，包含以下欄位：company (保險公司與商品名稱), policyNo (保單號碼), type (主約或附約), period (生效日與繳費年期), content (保障內容摘要), exceptions (除外責任或備註), amount (年繳保費，純數字), payment (扣款方式)。若無法辨識請填 "待確認"。`, base64);
                 
-                if (res.name) {
-                    insurancePolicies.push({ id: Date.now(), name: res.name, amount: res.amount || 0, date: currentDate, features: res.features || 'AI 辨識' });
-                    saveData();
-                    showToast("保單匯入成功！", "success");
+                if (res.company) {
+                    openPolicyModal(res);
                 } else {
                     throw new Error("無法辨識");
                 }
             } catch(e) {
                 showToast("辨識失敗，請手動輸入", "error");
-                openInputModal('insurance_add');
+                openPolicyModal();
             }
         };
 
@@ -1088,17 +1117,24 @@
             document.getElementById('ins-shield-icon').className = `text-4xl mb-1 ${shieldStatus}`;
             
             setHTML('policy-list', insurancePolicies.length ? insurancePolicies.map(p=>`
-                <div class="bg-gradient-to-br from-teal-50 to-white p-3 rounded-xl border border-teal-100 shadow-sm relative overflow-hidden">
-                    <div class="flex justify-between items-start">
+                <div class="bg-gradient-to-br from-teal-50 to-white p-3 rounded-xl border border-teal-100 shadow-sm relative overflow-hidden mb-2">
+                    <div class="flex justify-between items-start mb-2">
                         <div>
-                            <div class="text-xs text-teal-600 font-bold mb-1">🛡️ 保單</div>
-                            <div class="font-bold text-gray-800 text-lg">${p.name}</div>
-                            <div class="text-xs text-gray-500 mt-1">${p.features || '一般保險'}</div>
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-xs text-teal-600 font-bold">🛡️ ${p.company}</span>
+                                <span class="text-[10px] ${p.type==='主約'?'bg-blue-100 text-blue-600':'bg-gray-100 text-gray-500'} px-1 rounded">${p.type||'主約'}</span>
+                            </div>
+                            <div class="font-bold text-gray-800 text-lg">${p.company}</div> 
+                            <div class="text-[10px] text-gray-400 mt-0.5">保單號: ${p.policyNo || 'N/A'}</div>
                         </div>
                         <div class="text-right">
-                            <div class="font-black text-teal-700 text-xl">$${p.amount.toLocaleString()}</div>
+                            <div class="font-black text-teal-700 text-xl">$${(p.amount||0).toLocaleString()}</div>
                             <div class="text-[10px] text-gray-400">/年</div>
                         </div>
+                    </div>
+                    <div class="text-xs text-gray-600 bg-teal-50/50 p-2 rounded border border-teal-50">
+                        <div class="mb-1"><span class="font-bold">內容:</span> ${p.content || '無摘要'}</div>
+                        ${p.exceptions ? `<div class="text-red-400"><span class="font-bold">注意:</span> ${p.exceptions}</div>` : ''}
                     </div>
                     <button onclick="removePolicy('${p.id}')" class="absolute top-2 right-2 text-gray-300 hover:text-red-500">×</button>
                 </div>
@@ -1116,10 +1152,113 @@
             const currCat = document.getElementById('log-category').value;
             changeLogCategory(currCat);
         };
+
+        // NEW: Policy Edit Modal Functions
+        window.openPolicyModal = (data = null) => {
+            pendingPolicyData = data || {};
+            // If data is passed (from AI), map it. If not (manual add), clear it.
+            setValue('pol-company', pendingPolicyData.company || '');
+            setValue('pol-no', pendingPolicyData.policyNo || '');
+            setValue('pol-type', pendingPolicyData.type || '主約');
+            setValue('pol-period', pendingPolicyData.period || '');
+            setValue('pol-content', pendingPolicyData.content || '');
+            setValue('pol-exceptions', pendingPolicyData.exceptions || '');
+            setValue('pol-amount', pendingPolicyData.amount || '');
+            setValue('pol-payment', pendingPolicyData.payment || '');
+            
+            document.getElementById('policy-edit-modal').classList.remove('hidden');
+        };
+
+        window.saveVerifiedPolicy = () => {
+            const company = document.getElementById('pol-company').value;
+            const amount = parseInt(document.getElementById('pol-amount').value) || 0;
+            
+            if(!company) return showToast("請輸入保險名稱", "error");
+
+            const newPolicy = {
+                id: Date.now().toString(),
+                company: company,
+                policyNo: document.getElementById('pol-no').value,
+                type: document.getElementById('pol-type').value,
+                period: document.getElementById('pol-period').value,
+                content: document.getElementById('pol-content').value,
+                exceptions: document.getElementById('pol-exceptions').value,
+                amount: amount,
+                payment: document.getElementById('pol-payment').value,
+                date: currentDate
+            };
+
+            insurancePolicies.push(newPolicy);
+            saveData();
+            closeModal('policy-edit');
+            showToast("保單已儲存", "success");
+        };
     </script>
 </head>
 <body class="bg-gray-50 pb-20 select-none text-gray-800">
     <div id="toast" class="hidden fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-white bg-black z-50"></div>
+
+    <!-- Policy Edit Modal -->
+    <div id="policy-edit-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-white w-full max-w-sm rounded-xl p-5 shadow-xl my-8" onclick="event.stopPropagation()">
+            <h3 class="font-bold mb-4 text-lg border-b pb-2 flex justify-between items-center">
+                <span>📝 保單資料確認</span>
+                <button onclick="closeModal('policy-edit')" class="text-gray-400 text-sm">×</button>
+            </h3>
+            
+            <div class="space-y-3 text-sm">
+                <div>
+                    <label class="text-xs text-gray-500 font-bold block mb-1">保險公司 & 商品名稱</label>
+                    <input id="pol-company" type="text" class="w-full border p-2 rounded bg-gray-50" placeholder="e.g. 富邦人壽 - 醫事通">
+                </div>
+                
+                <div class="flex gap-2">
+                    <div class="flex-1">
+                        <label class="text-xs text-gray-500 font-bold block mb-1">保單號碼</label>
+                        <input id="pol-no" type="text" class="w-full border p-2 rounded" placeholder="號碼">
+                    </div>
+                    <div class="w-1/3">
+                        <label class="text-xs text-gray-500 font-bold block mb-1">類型</label>
+                        <select id="pol-type" class="w-full border p-2 rounded bg-white">
+                            <option value="主約">主約</option>
+                            <option value="附約">附約</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-500 font-bold block mb-1">生效日 & 繳費年期</label>
+                    <input id="pol-period" type="text" class="w-full border p-2 rounded" placeholder="e.g. 2020/01/01, 20年期">
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-500 font-bold block mb-1">保障內容摘要</label>
+                    <textarea id="pol-content" class="w-full border p-2 rounded h-20 text-xs" placeholder="e.g. 住院日額2000, 實支15萬"></textarea>
+                </div>
+
+                <div>
+                    <label class="text-xs text-red-500 font-bold block mb-1">⚠️ 除外責任 / 備註</label>
+                    <textarea id="pol-exceptions" class="w-full border border-red-100 bg-red-50 p-2 rounded h-16 text-xs" placeholder="e.g. 牙齒手術除外"></textarea>
+                </div>
+
+                <div class="flex gap-2">
+                    <div class="flex-1">
+                        <label class="text-xs text-teal-600 font-bold block mb-1">年繳保費 ($)</label>
+                        <input id="pol-amount" type="number" class="w-full border-2 border-teal-100 p-2 rounded font-bold text-teal-800">
+                    </div>
+                    <div class="flex-1">
+                        <label class="text-xs text-gray-500 font-bold block mb-1">扣款方式</label>
+                        <input id="pol-payment" type="text" class="w-full border p-2 rounded" placeholder="e.g. 信用卡">
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-5 flex gap-2">
+                <button onclick="closeModal('policy-edit')" class="flex-1 py-2 text-gray-400">取消</button>
+                <button onclick="saveVerifiedPolicy()" class="flex-1 bg-teal-600 text-white py-2 rounded-lg font-bold shadow hover:bg-teal-700">確認儲存</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Portfolio Manager Modal -->
     <div id="portfolio-action-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onclick="closeModal('portfolio-action')">
@@ -1195,7 +1334,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.19</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.20</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1352,7 +1491,7 @@
                     <h3 class="font-bold text-teal-800 text-sm flex items-center gap-1">我的保險錢包</h3>
                     <div class="flex gap-2">
                         <button onclick="openCameraModal('policy')" class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded border hover:bg-gray-200">📷 掃描</button>
-                        <button onclick="openInputModal('insurance_add')" class="bg-teal-600 text-white text-xs font-bold px-3 py-1 rounded-lg shadow hover:bg-teal-700 active:scale-95">＋ 新增</button>
+                        <button onclick="openPolicyModal()" class="bg-teal-600 text-white text-xs font-bold px-3 py-1 rounded-lg shadow hover:bg-teal-700 active:scale-95">＋ 新增</button>
                     </div>
                 </div>
                 <div id="policy-list" class="space-y-2"></div>
@@ -1418,7 +1557,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.19</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.20</div>
         </div>
     </main>
 
