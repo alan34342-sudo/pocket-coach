@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pocket Coach v18.21</title>
+    <title>Pocket Coach v18.23</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -73,7 +73,8 @@
         let currentEditingAmount = 0;
         let currentInputMode = ''; 
         let currentInputId = null;
-        let editingPolicyId = null; // Track if we are editing an existing policy
+        let editingPolicyId = null; 
+        let pendingPolicyData = null;
 
         // Chat Memory
         let chatSessionMemory = { health: [], finance: [], insurance: [] };
@@ -717,7 +718,7 @@
                 
                 // Get History
                 const history = chatSessionMemory[contextType] || [];
-                const historyStr = history.slice(-10).map(h => `${h.role === 'user' ? '用戶' : 'AI'}: ${h.text}`).join('\n'); // Limit to last 10 turns
+                const historyStr = history.slice(-10).map(h => `${h.role === 'user' ? '用戶' : 'AI'}: ${h.text}`).join('\n'); 
 
                 let context = "";
                 if(contextType === 'health') {
@@ -735,35 +736,75 @@
                     const entSpent = monthLogs.filter(l => l.category === '娛樂').reduce((a,b) => a + (b.amount||0), 0);
                     const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
                     const invContext = investments.map(i => `${i.symbol}: ${i.note}`).join(", ");
-                    
-                    // Cross-reference Insurance
                     const insTotal = insurancePolicies.reduce((a,b)=>a+(b.amount||0),0);
                     const insContext = `保險年繳:$${insTotal}。`;
-
                     const portfolio = {};
                     dailyLogs.filter(l => l.category === '投資').forEach(l => { portfolio[l.description.trim()] = (portfolio[l.description.trim()] || 0) + (l.amount || 0); });
                     const portStr = Object.entries(portfolio).map(([k,v]) => `${k}:$${v}`).join(", ");
-
                     context = `角色:理財顧問。月收${incomeTotal}, 固定支${fixedTotal}, 可支配${disposable}。娛樂剩${entBudget - entSpent}。總資產${totalAsset}。持倉:[${portStr}]。${insContext} 觀點:[${invContext}]。請簡短回答。請記住對話上下文。`;
                 } else if (contextType === 'insurance') {
                     const totalPremium = insurancePolicies.reduce((a,b)=>a+(b.amount||0),0);
                     const policiesStr = insurancePolicies.map(p => `${p.company}($${p.amount})`).join(', ');
-                    
-                    // Cross-reference Finance
                     const totalAsset = accounts.reduce((a,b)=>a+b.balance,0);
                     const finContext = `目前總資產:$${totalAsset}。`;
-
-                    context = `角色:保險顧問。用戶: ${userProfile.age}歲, ${userProfile.gender==='male'?'男':'女'}。${finContext} 現有保單: [${policiesStr}]。年繳總保費: $${totalPremium}。請簡短回答用戶問題。請記住對話上下文。`;
+                    
+                    context = `角色:保險顧問。用戶: ${userProfile.age}歲, ${userProfile.gender==='male'?'男':'女'}。${finContext} 現有保單: [${policiesStr}]。年繳總保費: $${totalPremium}。請簡短回答用戶問題。請記住對話上下文。
+                    
+                    【重要指令：保費調整規則】
+                    用戶非常重視金額的精確性，絕對禁止自行「預估」或「計算」漲幅。
+                    1. 當用戶提供具體的「新的保費金額」時（例如：「富邦變35000」），請回傳 JSON 指令更新：
+                       {"action": "update_policy", "target": "富邦", "new_amount": 35000, "reply": "好的，已將富邦保費更新為精確的 $35,000。"}
+                    2. 若用戶僅告知年齡變更（如「我31歲了」），請只更新年齡，並提醒用戶確認保費是否變動，絕對不要自動修改保費數字。
+                       回傳：{"action": "update_profile", "age": 31, "reply": "年齡已更新為 31 歲。請確認您的自然費率保單（如醫療險）保費是否有變動？若有，請告訴我正確金額。"}
+                    3. 金額必須與用戶提供的完全一致，禁止四捨五入或預測。
+                    `;
                 }
 
-                // Construct full prompt with history
                 const fullPrompt = `${context}\n\n[對話歷史]\n${historyStr}\n\n用戶問: ${msg}`;
-
                 const res = await callAI(fullPrompt);
                 
+                // Handle Action Response (Supports Multiple Actions via Regex parsing)
+                let responseText = res;
+                let actionMatch = res.match(/\{[\s\S]*?\}/g); // Find all JSON blocks
+
+                if (actionMatch) {
+                    let combinedReply = "";
+                    for (const jsonStr of actionMatch) {
+                        try {
+                            const actionData = JSON.parse(jsonStr);
+                            
+                            if (actionData.action === 'update_policy') {
+                                const targetName = actionData.target;
+                                const newAmt = actionData.new_amount;
+                                const pIndex = insurancePolicies.findIndex(p => p.company.includes(targetName) || (p.content && p.content.includes(targetName)));
+                                
+                                if (pIndex !== -1) {
+                                    insurancePolicies[pIndex].amount = newAmt;
+                                    combinedReply += `✅ 已更新 ${insurancePolicies[pIndex].company} 保費為 $${newAmt.toLocaleString()}。\n`;
+                                } else {
+                                    combinedReply += `❓ 找不到包含 "${targetName}" 的保單，請確認名稱後再試。\n`;
+                                }
+                            } else if (actionData.action === 'update_profile') {
+                                if (actionData.age) userProfile.age = actionData.age;
+                                saveData();
+                                combinedReply += `✅ 基本資料已更新為 ${actionData.age} 歲。\n`;
+                            }
+                            
+                            // Use AI's reply text if available and not purely functional
+                            if(actionData.reply && !combinedReply.includes(actionData.reply)) combinedReply = actionData.reply + "\n" + combinedReply;
+
+                        } catch(e) { console.error("JSON Parse Error", e); }
+                    }
+                    if (combinedReply) {
+                        saveData();
+                        refreshUI();
+                        responseText = combinedReply; // Override raw text with execution log
+                    }
+                }
+
                 // Save to Memory
                 chatSessionMemory[contextType].push({ role: 'user', text: msg });
-                const displayNum = typeof res === 'object' ? `AI Error: ${res.error}` : res; 
+                const displayNum = typeof responseText === 'object' ? `AI Error: ${responseText.error}` : responseText; 
                 chatSessionMemory[contextType].push({ role: 'model', text: displayNum });
 
                 document.getElementById(loadingId).remove();
@@ -1382,7 +1423,7 @@
     <!-- Header -->
     <div class="bg-white p-3 shadow-sm sticky top-0 z-20">
         <div class="flex justify-between items-center">
-            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.21</span></div>
+            <div class="font-black text-lg">Pocket Coach <span class="text-xs bg-indigo-100 text-indigo-600 px-1 rounded">V18.23</span></div>
             <div class="flex items-center gap-2">
                 <span id="current-date-display" class="font-bold text-lg text-gray-700"></span>
                 <button onclick="toggleCalendar()" class="bg-gray-100 p-2 rounded-lg text-xs font-bold text-gray-600 flex items-center gap-1">📅</button>
@@ -1605,7 +1646,7 @@
                     <button onclick="importData()" class="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-sm hover:bg-red-100">匯入</button>
                 </div>
             </div>
-            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.21</div>
+            <div class="text-center mt-8 text-xs text-gray-300">Pocket Coach v18.23</div>
         </div>
     </main>
 
